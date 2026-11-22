@@ -1,22 +1,72 @@
 #!/usr/bin/env python3
 """
-Fetch daily market data for the KKS Debrief page and write data/history.json.
+Fetch daily market data for the KKS console and write data/history.json.
+
+What it covers (6 pages; the Screener page was removed from the site):
+  - Debrief tape: 8 index/factor ETFs (SPY, QQQ, IWM, DIA, RSP, QQQE,
+    SPMO, TLT) — 1D %, 1M % vs RSP, 50D ATR index.
+  - Breadth: computed from S&P 500 constituents (Wikipedia list, fetched
+    live). Daily +-4% up/down, 5D/10D up-down ratios, Quarter +-25%,
+    Month +-25%, Month +-50%, 34-session +-13%, Above-40D %, SPX close.
+  - Market Strength: 8 index cards + Market segments (9), Equal-weight
+    sectors (11) and SPDR sectors (11) — RS 1M %, RS Thrust %, 50D ATR
+    index, RS vs RSP, Intraday, 1D, 1M, Off-52W-High.
+  - Industry Group Strength: all 173 industry/thematic ETFs in IND_LIST,
+    same columns as Market Strength.
+  - Positioning: 10 COT markets from the CFTC legacy futures-only file
+    (deafut.txt). Large specs = Noncommercial, Commercials = Commercial,
+    Small specs = Nonreportable. Percentiles are the rank of each
+    group's current net position in the net-position series stored in
+    history.json (5-year lookback, accumulating as the workflow runs;
+    50.0 until at least 2 observations exist). Never invent a COT value
+    for a week with no release: if the CFTC file cannot be fetched, or
+    its report date is unchanged, the last published positioning is
+    carried forward unchanged.
+  - Liquid Leadership: leaders from the S&P 500 + Nasdaq-100
+    constituents, filtered to avg dollar volume > $100M and avg shares
+    > 1M (21-session means), top 2% by 1M return, with 1M return %,
+    extension vs 50D SMA (in 50D ATR multiples), avg $ vol, avg shares
+    and ADR %; plus a group-leadership summary by GICS sub-industry.
 
 Sources (all free / public):
-  - Yahoo Finance via yfinance: daily closes for index / factor ETFs
-    SPY, QQQ, IWM, DIA, RSP, QQQE, SPMO, TLT and sector / industry ETFs.
-    Yahoo Finance has no official public API; yfinance scrapes its
-    chart endpoints, so treat this as best-effort and keep the last
-    good history.json when a fetch fails.
-  - Stooq (https://stooq.com) CSV: free daily closes, useful as a
-    fallback for the same tickers, and for intraday 5-minute bars.
-  - CFTC Commitments of Traders: weekly COT CSV for Positioning.
-    The Debrief page uses the last published COT release; do not
-    invent a COT value for a week with no release.
+  - Yahoo Finance via yfinance: daily OHLCV. Yahoo has no official
+    public API; yfinance scrapes its chart endpoints, so treat this as
+    best-effort. Stooq daily CSV is the fallback for ETF tickers.
+  - Wikipedia (List of S&P 500 companies / NASDAQ-100): constituent
+    lists with GICS sector and sub-industry. Parsed with the stdlib
+    HTML parser — no extra dependency.
+  - CFTC Commitments of Traders, legacy futures-only file:
+    https://www.cftc.gov/dea/newcot/deafut.txt (weekly, Tuesdays).
+    Contract codes are pinned in COT_MARKETS and were verified against
+    the reference site's 2026-11-17 report (e.g. E-mini S&P 500 net
+    -93,966, Natural gas net -262,984).
 
-TradingView is NOT a data API here. Use its embed widgets
-(Advanced Real-Time Chart / Symbol Overview) in index.html for
-charts only. The numbers on the Debrief page come from history.json.
+Definitions:
+  - 1D = last session. 1M = 21 sessions. Strength benchmark = RSP.
+  - RS 1M % = percentile rank (0-100) of the ETF's 1M return inside
+    its own universe (Market Strength rows rank inside their group;
+    Industry rows rank inside all 173).
+  - RS Thrust % = percentile rank of the ETF's 5-session return inside
+    the same universe (recent acceleration). This is our approximation:
+    the reference site's exact thrust formula is not published.
+  - 50D ATR index = the session's dollar move / 50-day ATR (dollars),
+    i.e. the move in ATR multiples. atr_pct = 50D ATR as % of close.
+  - Intraday % = (close - open) / open for the session.
+  - Off 52W H % = close / highest high of the last 252 sessions - 1.
+  - Breadth windows: Quarter = 63 sessions, Month = 21 sessions,
+    34D = 34 sessions. 5D/10D ratio = sum of daily up counts over the
+    last 5/10 sessions / sum of daily down counts over the same window.
+  - Above 40D % = share of constituents with close above their
+    40-session moving average.
+  - ADR % = mean true-range % over the last 21 sessions.
+  - Extension = (close - 50-session SMA) / 50D ATR, in ATR multiples.
+
+Behaviour (unchanged from the original script):
+  - Only append new sessions; never rewrite history for past dates.
+  - 1M = 21 sessions, benchmark RSP.
+  - On any fetch failure the script prints a warning, exits 0 and
+    leaves the last good history.json untouched. Sections whose data
+    could not be fetched are null in the new session — never invented.
 
 Usage:
     pip install -r scripts/requirements.txt
@@ -24,115 +74,954 @@ Usage:
 
 Output:
     data/history.json  — { "as_of": "YYYY-MM-DD", "sessions": [...] }
-    Each session is one close date with the same fields index.html
-    expects: tape (8 ETFs), breadth, sectors, industries, positioning.
-    Only append a new session; never rewrite history for past dates.
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
 import math
-import os
+import re
 import sys
+import urllib.request
 from datetime import date
+from html.parser import HTMLParser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_PATH = ROOT / "data" / "history.json"
 
 TAPE = ["SPY", "QQQ", "IWM", "DIA", "RSP", "QQQE", "SPMO", "TLT"]
+INDEX_NAMES = {
+    "SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000",
+    "DIA": "Dow Jones Industrial", "RSP": "S&P 500 equal weight",
+    "QQQE": "Nasdaq 100 equal weight", "SPMO": "S&P 500 momentum",
+    "TLT": "20Y+ Treasury",
+}
 BENCHMARK = "RSP"  # 1M strength is measured vs RSP, 1M = 21 sessions
 SESSIONS_1M = 21
+SESSIONS_QUARTER = 63
+SESSIONS_34D = 34
+SESSIONS_50D = 50
+SESSIONS_40D = 40
+SESSIONS_52W = 252
+
+# Market Strength rows, exactly as on the site: (ticker, name).
+SEGMENTS = [
+    ("SPY", "Large cap"), ("QQQ", "Large cap growth"),
+    ("IVE", "Large cap value"), ("MDY", "Mid cap"),
+    ("IWM", "Small cap"), ("RSP", "Equal weight"),
+    ("SPMO", "Momentum"), ("SCHD", "Dividend"),
+    ("USMV", "Low volatility"),
+]
+EQUAL_WEIGHT_SECTORS = [
+    ("RSPS", "Consumer staples EW"), ("RSPU", "Utilities EW"),
+    ("RSPR", "Real estate EW"), ("RSPD", "Discretionary EW"),
+    ("RSPI", "Industrials EW"), ("RSPH", "Health care EW"),
+    ("RSPF", "Financials EW"), ("RSPM", "Materials EW"),
+    ("RSPC", "Communication EW"), ("RSPE", "Energy EW"),
+    ("RSPT", "Technology EW"),
+]
+SPDR_SECTORS = [
+    ("XLP", "Staples"), ("XLRE", "Real Estate"), ("XLU", "Utilities"),
+    ("XLY", "Discretionary"), ("XLV", "Health Care"),
+    ("XLI", "Industrials"), ("XLF", "Financials"),
+    ("XLB", "Materials"), ("XLE", "Energy"),
+    ("XLC", "Communication"), ("XLK", "Technology"),
+]
+
+# Industry Group Strength: all 173 industry/thematic ETFs, exactly as
+# on the site (ticker, name). Filled in by the build step from the
+# exported site; see the end of this file for the list.
+IND_LIST = [
+    ('UNG', 'Natural gas'),
+    ('BOIL', 'Natural gas 2x'),
+    ('KOLD', 'Natural gas inverse'),
+    ('USO', 'WTI crude oil'),
+    ('UCO', 'Crude oil 2x'),
+    ('SCO', 'Crude oil inverse'),
+    ('FCG', 'Natural gas equities'),
+    ('XOP', 'Oil & gas E&P'),
+    ('OIH', 'Oil services'),
+    ('XES', 'Oil equipment'),
+    ('AMJ', 'MLPs'),
+    ('MLPX', 'Midstream energy'),
+    ('PHO', 'Water'),
+    ('FIW', 'Water resources'),
+    ('CGW', 'Global water'),
+    ('JETS', 'Airlines'),
+    ('AWAY', 'Travel technology'),
+    ('RTH', 'Retail'),
+    ('XRT', 'Retail equal weight'),
+    ('IBUY', 'Online retail'),
+    ('ONLN', 'Online retail pro'),
+    ('CLIX', 'Long online / short stores'),
+    ('EBIZ', 'E-commerce'),
+    ('IHI', 'Medical equipment'),
+    ('XHE', 'Health care equipment'),
+    ('XBI', 'Biotechnology SPDR'),
+    ('IBB', 'Biotechnology'),
+    ('PBE', 'Biotech & genome'),
+    ('XPH', 'Pharmaceuticals'),
+    ('PPH', 'Pharmaceutical portfolio'),
+    ('LABU', 'Biotech 3x'),
+    ('LABD', 'Biotech -3x'),
+    ('ARKG', 'Genomic revolution'),
+    ('KRE', 'Regional banks'),
+    ('KBWB', 'Bank portfolio'),
+    ('KBE', 'Bank equal weight'),
+    ('KBWR', 'Regional banking'),
+    ('FINX', 'Fintech'),
+    ('IPAY', 'Payments'),
+    ('ARKF', 'Fintech innovation'),
+    ('XSD', 'Semiconductor equal weight'),
+    ('SOXL', 'Semiconductor 3x'),
+    ('SOXS', 'Semiconductor -3x'),
+    ('SMH', 'Semiconductors'),
+    ('SOXX', 'Semiconductor index'),
+    ('PSI', 'Semiconductor dynamic'),
+    ('XSW', 'Software & services'),
+    ('HACK', 'Cybersecurity'),
+    ('CIBR', 'Cybersecurity Nasdaq'),
+    ('SKYY', 'Cloud computing'),
+    ('CLOU', 'Cloud computing global'),
+    ('WCLD', 'Cloud software'),
+    ('BOTZ', 'Robotics & AI'),
+    ('ROBO', 'Robotics automation'),
+    ('ARKQ', 'Autonomous technology'),
+    ('ARKW', 'Next generation internet'),
+    ('ARKK', 'Innovation'),
+    ('QTUM', 'Quantum computing'),
+    ('XME', 'Metals & mining'),
+    ('COPX', 'Copper miners'),
+    ('PICK', 'Mining & metals'),
+    ('GDX', 'Gold miners'),
+    ('GDXJ', 'Junior gold miners'),
+    ('SIL', 'Silver miners'),
+    ('SLVP', 'Silver miners iShares'),
+    ('URA', 'Uranium'),
+    ('URNM', 'Uranium miners'),
+    ('LIT', 'Lithium & battery'),
+    ('REMX', 'Rare earth metals'),
+    ('SGDM', 'Gold miners sponsor'),
+    ('GOEX', 'Gold explorers'),
+    ('RING', 'Gold miners iShares'),
+    ('XHB', 'Homebuilders'),
+    ('ITB', 'Home construction'),
+    ('NAIL', 'Homebuilders 3x'),
+    ('PBW', 'Clean energy'),
+    ('TAN', 'Solar'),
+    ('FAN', 'Wind energy'),
+    ('ICLN', 'Clean energy global'),
+    ('QCLN', 'Clean energy index'),
+    ('ACES', 'Clean energy solutions'),
+    ('SMOG', 'Low carbon energy'),
+    ('KRBN', 'Carbon allowances'),
+    ('DBA', 'Agriculture'),
+    ('CORN', 'Corn fund'),
+    ('WEAT', 'Wheat fund'),
+    ('SOYB', 'Soybean fund'),
+    ('CANE', 'Sugar fund'),
+    ('IYR', 'US real estate'),
+    ('SCHH', 'US REIT'),
+    ('REM', 'Mortgage REITs'),
+    ('MORT', 'Mortgage REIT income'),
+    ('ESPO', 'Video gaming'),
+    ('GAMR', 'Gaming & eSports'),
+    ('HERO', 'Gaming heroes'),
+    ('SOCL', 'Social media'),
+    ('MILN', 'Millennials'),
+    ('GNOM', 'Genomics & biotech'),
+    ('BUG', 'Cybersecurity bug'),
+    ('DRIV', 'Electric vehicles'),
+    ('KARS', 'Electric vehicles Krane'),
+    ('KWEB', 'China internet'),
+    ('CQQQ', 'China technology'),
+    ('MCHI', 'China'),
+    ('FXI', 'China large cap'),
+    ('EWH', 'Hong Kong'),
+    ('EWT', 'Taiwan'),
+    ('EWJ', 'Japan'),
+    ('EWZ', 'Brazil'),
+    ('EWW', 'Mexico'),
+    ('INDA', 'India'),
+    ('INDY', 'India 50'),
+    ('VNM', 'Vietnam'),
+    ('TUR', 'Turkey'),
+    ('GREK', 'Greece'),
+    ('EWP', 'Spain'),
+    ('EWI', 'Italy'),
+    ('EWG', 'Germany'),
+    ('EPU', 'Peru'),
+    ('ARGT', 'Argentina'),
+    ('GXG', 'Colombia'),
+    ('ECH', 'Chile'),
+    ('NORW', 'Norway'),
+    ('EIRL', 'Ireland'),
+    ('UVXY', 'Volatility 1.5x'),
+    ('VIXY', 'Volatility futures'),
+    ('SVXY', 'Volatility inverse'),
+    ('VXX', 'Volatility note'),
+    ('TQQQ', 'Nasdaq 3x'),
+    ('SQQQ', 'Nasdaq -3x'),
+    ('SPXL', 'S&P 500 3x'),
+    ('SPXS', 'S&P 500 -3x'),
+    ('UPRO', 'S&P 500 3x pro'),
+    ('TNA', 'Small cap 3x'),
+    ('TZA', 'Small cap -3x'),
+    ('FAS', 'Financial 3x'),
+    ('FAZ', 'Financial -3x'),
+    ('NUGT', 'Gold miners 2x'),
+    ('DUST', 'Gold miners -2x'),
+    ('JNUG', 'Junior miners 2x'),
+    ('JDST', 'Junior miners -2x'),
+    ('ERX', 'Energy 2x'),
+    ('ERY', 'Energy -2x'),
+    ('GUSH', 'Oil & gas 2x'),
+    ('DRIP', 'Oil & gas -2x'),
+    ('DIG', 'Oil & gas 2x pro'),
+    ('DUG', 'Oil & gas -2x pro'),
+    ('UYM', 'Materials 2x'),
+    ('SMN', 'Materials -2x'),
+    ('DDM', 'Dow 2x'),
+    ('DXD', 'Dow -2x'),
+    ('QID', 'Nasdaq -2x'),
+    ('SDS', 'S&P 500 -2x'),
+    ('SSO', 'S&P 500 2x'),
+    ('QLD', 'Nasdaq 2x'),
+    ('UDOW', 'Dow 3x'),
+    ('SDOW', 'Dow -3x'),
+    ('TMF', 'Treasury 3x'),
+    ('TMV', 'Treasury -3x'),
+    ('TBT', 'Treasury -2x'),
+    ('PST', 'Treasury -2x ultra'),
+    ('TTT', 'Treasury -3x pro'),
+    ('IBIT', 'Bitcoin trust'),
+    ('ETHA', 'Ether trust'),
+    ('BITO', 'Bitcoin futures'),
+    ('ETHE', 'Ethereum trust'),
+    ('GBTC', 'Bitcoin trust Grayscale'),
+    ('FDIG', 'Digital payments'),
+    ('VCX', 'Private technology'),
+    ('ARKX', 'Space exploration'),
+    ('UFO', 'Space industry'),
+    ('SVIX', 'Short volatility futures'),
+    ('MOON', 'Moonshot innovators')
+]
+
+# Positioning: (ETF, name, CFTC legacy contract code in deafut.txt).
+# Verified against the reference site's 2026-11-17 COT report.
+COT_MARKETS = [
+    ("IWM", "Russell 2000", "239742"),   # RUSSELL E-MINI - CME
+    ("SPY", "S&P 500", "13874A"),        # E-MINI S&P 500 - CME
+    ("QQQ", "Nasdaq 100", "209742"),     # NASDAQ MINI - CME
+    ("IBIT", "Bitcoin", "133741"),       # BITCOIN - CME
+    ("ETHA", "Ether", "146021"),         # ETHER CASH SETTLED - CME
+    ("GLD", "Gold", "088691"),           # GOLD - COMEX
+    ("CPER", "Copper", "085692"),        # COPPER- #1 - COMEX
+    ("SLV", "Silver", "084691"),         # SILVER - COMEX
+    ("USO", "WTI crude oil", "067651"),  # WTI-PHYSICAL - NYMEX
+    ("UNG", "Natural gas", "023651"),    # NAT GAS NYME - NYMEX
+]
+COT_URL = "https://www.cftc.gov/dea/newcot/deafut.txt"
+SPX_LIST_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+NDX_LIST_URL = "https://en.wikipedia.org/wiki/List_of_NASDAQ-100_companies"
+UA = {"User-Agent": "Mozilla/5.0 (KKS data fetcher; github.com/koivan61/KKS)"}
 
 
-def pct(a: float, b: float) -> float | None:
-    if not b or not math.isfinite(a) or not math.isfinite(b):
+# ---------------------------------------------------------------- helpers
+
+def pct(a: float | None, b: float | None) -> float | None:
+    if a is None or b is None or not b or not math.isfinite(a) or not math.isfinite(b):
         return None
     return round((a / b - 1.0) * 100.0, 2)
 
 
-def atr_index(session_return: float | None, atr: float | None) -> float | None:
-    """Return / ATR, rounded to 2dp. None when either input is missing."""
-    if session_return is None or atr is None or atr == 0:
+def _num(x) -> float | None:
+    try:
+        v = float(str(x).strip())
+    except (TypeError, ValueError):
         return None
-    return round(session_return / atr, 2)
+    return v if math.isfinite(v) else None
 
 
-def fetch_closes() -> dict:
-    """Return {ticker: [(date, close), ...]} using yfinance, or {} on failure."""
+def _pct_rank(value: float, population: list[float]) -> float | None:
+    """Percentile rank of value in population, 0-100."""
+    pop = sorted(v for v in population if v is not None)
+    if not pop or value is None:
+        return None
+    below = sum(1 for v in pop if v < value)
+    equal = sum(1 for v in pop if v == value)
+    if len(pop) == 1:
+        return 50.0
+    return round((below + 0.5 * equal) / (len(pop) - 1) * 100.0, 1)
+
+
+def _percentile_of(value: float, series: list[float]) -> float:
+    """Rank of value in series, 0-100; 50.0 when there is no history."""
+    if not series:
+        return 50.0
+    below = sum(1 for v in series if v < value)
+    equal = sum(1 for v in series if v == value)
+    if len(series) == 1:
+        return 50.0
+    return round((below + 0.5 * equal) / (len(series) - 1) * 100.0, 1)
+
+
+def yahoo_ticker(sym: str) -> str:
+    """Wikipedia uses BRK.B; Yahoo wants BRK-B."""
+    return sym.replace(".", "-")
+
+
+def _http_get(url: str, timeout: int = 30) -> bytes:
+    req = urllib.request.Request(url, headers=UA)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+# ---------------------------------------------------------------- OHLCV
+
+def fetch_ohlcv(tickers: list[str], period: str = "6mo") -> dict:
+    """{ticker: DataFrame indexed by date string with Close/High/Low/
+    Open/Volume} via yfinance, batched; {} on failure."""
     try:
         import yfinance as yf
     except ImportError:
-        print("yfinance not installed; run pip install -r scripts/requirements.txt", file=sys.stderr)
+        print("yfinance not installed; run pip install -r scripts/requirements.txt",
+              file=sys.stderr)
         return {}
-    try:
-        data = yf.download(
-            " ".join(TAPE), period="6mo", interval="1d",
-            auto_adjust=False, progress=False, group_by="ticker",
-        )
-    except Exception as exc:  # noqa: BLE001 - network / Yahoo outage: keep old data
-        print(f"yfinance download failed: {exc}", file=sys.stderr)
-        return {}
-    out: dict[str, list] = {}
-    for ticker in TAPE:
+    out: dict = {}
+    for i in range(0, len(tickers), 80):
+        chunk = tickers[i:i + 80]
         try:
-            closes = data[ticker]["Close"].dropna()
-        except Exception:
+            data = yf.download(
+                " ".join(chunk), period=period, interval="1d",
+                auto_adjust=False, progress=False, group_by="ticker",
+            )
+        except Exception as exc:  # noqa: BLE001 - keep old data
+            print(f"yfinance download failed for {chunk[:3]}...: {exc}",
+                  file=sys.stderr)
             continue
-        out[ticker] = [(d.date().isoformat(), float(v)) for d, v in closes.items()]
+        if data is None or len(data) == 0:
+            continue
+        for ticker in chunk:
+            try:
+                frame = data[ticker] if len(chunk) > 1 else data
+                closes = frame["Close"].dropna()
+                if len(closes) == 0:
+                    continue
+                sub = frame.loc[closes.index].copy()
+                sub.index = [d.date().isoformat() for d in sub.index]
+                out[ticker] = sub
+            except Exception:
+                continue
     return out
 
 
-def build_sessions(closes: dict) -> list[dict]:
-    """Build one session dict per close date from raw closes.
+def fetch_stooq(ticker: str) -> dict | None:
+    """Stooq daily CSV fallback for one ETF ticker; None on failure."""
+    url = f"https://stooq.com/q/d/l/?s={ticker.lower()}.us&i=d"
+    try:
+        raw = _http_get(url, timeout=20).decode("utf-8", "ignore")
+        import pandas as pd
+        frame = pd.read_csv(io.StringIO(raw), parse_dates=["Date"])
+    except Exception as exc:  # noqa: BLE001
+        print(f"Stooq fallback failed for {ticker}: {exc}", file=sys.stderr)
+        return None
+    if frame is None or len(frame) == 0 or "Close" not in frame.columns:
+        return None
+    frame = frame.dropna(subset=["Close"])
+    frame.index = [d.date().isoformat() for d in frame["Date"]]
+    return {"frame": frame}
 
-    This is a minimal, auditable version: 1D and 1M vs RSP for the
-    tape. Breadth / sector / industry / COT need their own sources
-    (SPX constituents, sector ETF list, CFTC files) — see README.md.
-    The front end already ships with sample sessions for
-    2026-11-13 to 2026-11-20; this script appends new sessions in
-    the same shape and never overwrites those samples.
+
+def fetch_etf_ohlcv(tickers: list[str]) -> dict:
+    """ETF OHLCV via yfinance, Stooq per-ticker fallback for gaps."""
+    out = fetch_ohlcv(tickers, period="6mo")
+    missing = [t for t in tickers if t not in out]
+    for ticker in missing:
+        got = fetch_stooq(ticker)
+        if got is not None:
+            out[ticker] = got["frame"]
+    return out
+
+
+# ---------------------------------------------------------------- constituents
+
+class _TablesParser(HTMLParser):
+    """Collect every <table> as a list of rows of cell text."""
+
+    def __init__(self):
+        super().__init__()
+        self.tables: list = []
+        self._table = None
+        self._row = None
+        self._buf = ""
+        self._in_cell = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "table":
+            self._table = []
+            self.tables.append(self._table)
+        elif tag == "tr" and self._table is not None:
+            self._row = []
+            self._table.append(self._row)
+        elif tag in ("td", "th") and self._row is not None:
+            self._in_cell = True
+            self._buf = ""
+
+    def handle_endtag(self, tag):
+        if tag in ("td", "th") and self._in_cell:
+            self._in_cell = False
+            self._row.append(self._buf.strip())
+        elif tag == "table":
+            self._table = None
+        elif tag == "tr":
+            self._row = None
+
+    def handle_data(self, data):
+        if self._in_cell:
+            self._buf += data
+
+
+def _parse_constituent_table(html: str) -> list[tuple[str, str, str]]:
+    """(yahoo ticker, GICS sector, GICS sub-industry) from a Wikipedia
+    constituents table; [] when the table cannot be found."""
+    parser = _TablesParser()
+    parser.feed(html)
+    for table in parser.tables:
+        if not table or not table[0]:
+            continue
+        header = [c.lower() for c in table[0]]
+        if not any(h in ("symbol", "ticker") for h in header):
+            continue
+        sym_i = next(i for i, h in enumerate(header) if h in ("symbol", "ticker"))
+        sec_i = next((i for i, h in enumerate(header) if "sector" in h and "sub" not in h), None)
+        sub_i = next((i for i, h in enumerate(header) if "sub-industry" in h or "sub industry" in h), None)
+        out = []
+        for row in table[1:]:
+            if len(row) <= sym_i:
+                continue
+            sym = re.sub(r"[^A-Z0-9.\-]", "", row[sym_i].upper())
+            if not sym or len(sym) > 6:
+                continue
+            sector = row[sec_i] if sec_i is not None and len(row) > sec_i else ""
+            sub = row[sub_i] if sub_i is not None and len(row) > sub_i else sector
+            out.append((yahoo_ticker(sym), sector, sub or sector))
+        if out:
+            return out
+    return []
+
+
+def fetch_constituents() -> dict:
+    """{yahoo ticker: (sector, sub-industry)} for S&P 500 + Nasdaq-100.
+
+    Returns {} when neither list can be fetched — callers must then
+    leave breadth/liquid null instead of inventing values.
     """
-    if BENCHMARK not in closes:
-        return []
-    dates = sorted({d for rows in closes.values() for d, _ in rows})
-    by_ticker = {
-        t: {d: c for d, c in rows} for t, rows in closes.items()
+    out: dict[str, tuple[str, str]] = {}
+    for url in (SPX_LIST_URL, NDX_LIST_URL):
+        try:
+            html = _http_get(url, timeout=30).decode("utf-8", "ignore")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Constituent list fetch failed ({url}): {exc}", file=sys.stderr)
+            continue
+        for sym, sector, sub in _parse_constituent_table(html):
+            out.setdefault(sym, (sector, sub))
+    if out:
+        print(f"Constituents: {len(out)} tickers (S&P 500 + Nasdaq-100)")
+    return out
+
+
+# ---------------------------------------------------------------- COT
+
+def fetch_cot() -> dict | None:
+    """Parse the CFTC legacy futures-only file.
+
+    Returns {"report_date": "YYYY-MM-DD", "markets": {etf: {...}}} or
+    None when the file cannot be fetched or a market is missing.
+    Legacy columns: 8/9 Noncommercial long/short, 11/12 Commercial
+    long/short, 15/16 Nonreportable long/short; 38/39, 41/42, 45/46
+    are the weekly changes in those positions.
+    """
+    try:
+        raw = _http_get(COT_URL, timeout=30).decode("utf-8", "ignore")
+    except Exception as exc:  # noqa: BLE001
+        print(f"CFTC COT fetch failed: {exc}", file=sys.stderr)
+        return None
+    by_code: dict[str, list] = {}
+    report_date = None
+    for row in csv.reader(io.StringIO(raw)):
+        if len(row) < 47:
+            continue
+        code = row[3].strip()
+        if not report_date and row[2].strip():
+            report_date = row[2].strip()
+        by_code[code] = row
+    markets = {}
+    for etf, name, code in COT_MARKETS:
+        row = by_code.get(code)
+        if row is None:
+            print(f"CFTC: contract {code} ({etf}) not in this week's file",
+                  file=sys.stderr)
+            return None
+        nc = _num(row[8])
+        nc_s = _num(row[9])
+        cm = _num(row[11])
+        cm_s = _num(row[12])
+        nr = _num(row[15])
+        nr_s = _num(row[16])
+        if None in (nc, nc_s, cm, cm_s, nr, nr_s):
+            return None
+        markets[etf] = {
+            "etf": etf,
+            "name": name,
+            "code": code,
+            "large_net": int(nc - nc_s),
+            "commercial_net": int(cm - cm_s),
+            "small_net": int(nr - nr_s),
+            "large_chg": int(_num(row[38]) - _num(row[39])) if _num(row[38]) is not None and _num(row[39]) is not None else None,
+            "commercial_chg": int(_num(row[41]) - _num(row[42])) if _num(row[41]) is not None and _num(row[42]) is not None else None,
+            "small_chg": int(_num(row[45]) - _num(row[46])) if _num(row[45]) is not None and _num(row[46]) is not None else None,
+        }
+    return {"report_date": report_date, "markets": markets}
+
+
+def _cot_percentiles(cot: dict, existing_sessions: list[dict]) -> dict:
+    """Add 0-100 percentiles for each COT group, ranked against the
+    net-position series already stored in history.json plus this
+    week's nets (5-year lookback = at most ~260 weekly reports)."""
+    series: dict[str, dict[str, list[float]]] = {}
+    for sess in existing_sessions:
+        pos = sess.get("positioning") or {}
+        for m in pos.get("markets", []) or []:
+            s = series.setdefault(m["etf"], {"large": [], "commercial": [], "small": []})
+            for key, field in (("large", "large_net"), ("commercial", "commercial_net"), ("small", "small_net")):
+                if m.get(field) is not None:
+                    s[key].append(float(m[field]))
+    out = {}
+    for etf, m in cot["markets"].items():
+        hist = series.get(etf, {"large": [], "commercial": [], "small": []})
+        entry = dict(m)
+        for key, field in (("large", "large_net"), ("commercial", "commercial_net"), ("small", "small_net")):
+            entry[f"{key}_pct"] = _percentile_of(float(m[field]), hist[key][-260:])
+        # Crowding call, same rule as the site: large specs at an
+        # extreme and commercials at the opposite extreme.
+        entry["state"] = (
+            "Crowded Short" if entry["large_pct"] <= 5 and entry["commercial_pct"] >= 95
+            else "Crowded Long" if entry["large_pct"] >= 95 and entry["commercial_pct"] <= 5
+            else "Within range"
+        )
+        out[etf] = entry
+    return out
+
+
+# ---------------------------------------------------------------- strength rows
+
+def _atr(frame, idx: int) -> tuple[float | None, float | None]:
+    """50D ATR in dollars and as % of close, ending at row idx."""
+    try:
+        import pandas as pd
+    except ImportError:
+        return None, None
+    if idx < 1:
+        return None, None
+    window = frame.iloc[max(0, idx - SESSIONS_50D + 1): idx + 1]
+    if len(window) < 10:
+        return None, None
+    high = window["High"].astype(float)
+    low = window["Low"].astype(float)
+    prev_close = window["Close"].astype(float).shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr = float(tr.mean())
+    close = float(frame["Close"].iloc[idx])
+    return atr, round(atr / close * 100.0, 2) if close else None
+
+
+def _strength_row(ticker: str, name: str, frame, dates: list[str],
+                  idx: int, bench_1m: float | None,
+                  universe_1m: list[float], universe_5d: list[float]) -> dict | None:
+    """One Market Strength / Industry row for session dates[idx]."""
+    row = frame.iloc[idx]
+    close = _num(row.get("Close"))
+    if close is None:
+        return None
+    prev_idx = idx - 1
+    ret_1d = None
+    if prev_idx >= 0:
+        ret_1d = pct(close, _num(frame["Close"].iloc[prev_idx]))
+    j = idx - SESSIONS_1M
+    ret_1m = pct(close, _num(frame["Close"].iloc[j])) if j >= 0 else None
+    k = idx - 5
+    ret_5d = pct(close, _num(frame["Close"].iloc[k])) if k >= 0 else None
+    open_px = _num(row.get("Open"))
+    intraday = round((close / open_px - 1.0) * 100.0, 2) if open_px else None
+    atr, atr_pct = _atr(frame, idx)
+    atr_index = None
+    if atr and ret_1d is not None:
+        move = close - float(frame["Close"].iloc[prev_idx])
+        atr_index = round(move / atr, 2)
+    high_52w = None
+    window = frame.iloc[max(0, idx - SESSIONS_52W + 1): idx + 1]
+    if len(window):
+        try:
+            high_52w = float(window["High"].astype(float).max())
+        except Exception:
+            high_52w = None
+    return {
+        "ticker": ticker,
+        "name": name,
+        "rs_1m_pct": _pct_rank(ret_1m, universe_1m),
+        "rs_thrust_pct": _pct_rank(ret_5d, universe_5d),
+        "atr_index": atr_index,
+        "atr_pct": atr_pct,
+        "rs_vs_rsp": round(ret_1m - bench_1m, 2) if ret_1m is not None and bench_1m is not None else None,
+        "intraday_pct": intraday,
+        "ret_1d_pct": ret_1d,
+        "ret_1m_pct": ret_1m,
+        "off_52w_high_pct": round((close / high_52w - 1.0) * 100.0, 2) if high_52w else None,
     }
+
+
+def _ret_at(frame, idx: int, back: int) -> float | None:
+    j = idx - back
+    if j < 0:
+        return None
+    return pct(_num(frame["Close"].iloc[idx]), _num(frame["Close"].iloc[j]))
+
+
+# ---------------------------------------------------------------- breadth
+
+def compute_breadth(const_closes, dates: list[str], spx_frame) -> dict:
+    """Breadth for every session date in `dates`, or None.
+
+    const_closes: DataFrame of constituent closes, columns = tickers,
+    index = date strings. Returns {date: breadth dict}.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return {}
+    if const_closes is None or const_closes.empty:
+        return {}
+    closes = const_closes.reindex(dates)
+    ret_1d = closes.pct_change() * 100.0
+    ret_21 = closes.pct_change(21) * 100.0
+    ret_63 = closes.pct_change(63) * 100.0
+    ret_34 = closes.pct_change(34) * 100.0
+    up_1d = (ret_1d >= 4.0)
+    down_1d = (ret_1d <= -4.0)
+    up_n = up_1d.sum(axis=1)
+    down_n = down_1d.sum(axis=1)
+    out = {}
+    for i, d in enumerate(dates):
+        if d not in ret_1d.index:
+            continue
+        def _count(frame, thr, sign):
+            col = frame.loc[d]
+            valid = col.notna()
+            if sign > 0:
+                return int(((col >= thr) & valid).sum())
+            return int(((col <= -thr) & valid).sum())
+        up5 = int(up_n.iloc[max(0, i - 4): i + 1].sum())
+        dn5 = int(down_n.iloc[max(0, i - 4): i + 1].sum())
+        up10 = int(up_n.iloc[max(0, i - 9): i + 1].sum())
+        dn10 = int(down_n.iloc[max(0, i - 9): i + 1].sum())
+        ma40 = closes.rolling(40, min_periods=40).mean()
+        above = closes.loc[d] > ma40.loc[d]
+        n_above = int(above.sum())
+        n_valid = int(ma40.loc[d].notna().sum())
+        spx_close = _num(spx_frame["Close"].loc[d]) if spx_frame is not None and d in spx_frame.index else None
+        spx_1d = None
+        if spx_frame is not None and d in spx_frame.index:
+            pos = list(spx_frame.index).index(d)
+            if pos > 0:
+                spx_1d = pct(spx_close, _num(spx_frame["Close"].iloc[pos - 1]))
+        out[d] = {
+            "daily_up": int(up_n.loc[d]),
+            "daily_down": int(down_n.loc[d]),
+            "ratio_5d": round(up5 / dn5, 2) if dn5 else None,
+            "ratio_10d": round(up10 / dn10, 2) if dn10 else None,
+            "quarter_up": _count(ret_63, 25.0, 1),
+            "quarter_down": _count(ret_63, 25.0, -1),
+            "month25_up": _count(ret_21, 25.0, 1),
+            "month25_down": _count(ret_21, 25.0, -1),
+            "month50_up": _count(ret_21, 50.0, 1),
+            "month50_down": _count(ret_21, 50.0, -1),
+            "d34_up": _count(ret_34, 13.0, 1),
+            "d34_down": _count(ret_34, 13.0, -1),
+            "above_40d_pct": round(n_above / n_valid * 100.0, 1) if n_valid else None,
+            "spx_close": spx_close,
+            "spx_session_pct": spx_1d,
+        }
+    return out
+
+
+# ---------------------------------------------------------------- liquid
+
+def compute_liquid(const_ohlcv: dict, constituents: dict, dates: list[str],
+                   bench_1m_by_date: dict) -> dict:
+    """Liquid leaders per session date.
+
+    const_ohlcv: {ticker: OHLCV frame}. Returns {date: liquid dict}.
+    Universe is S&P 500 + Nasdaq-100 constituents; a stock is liquid
+    when its 21-session mean dollar volume > $100M and mean shares
+    > 1M. Leaders are the top 2% by 1M return among liquid stocks.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return {}
+    tickers = [t for t in constituents if t in const_ohlcv]
+    if not tickers:
+        return {}
+    closes = pd.DataFrame({t: const_ohlcv[t]["Close"] for t in tickers})
+    highs = pd.DataFrame({t: const_ohlcv[t]["High"] for t in tickers})
+    lows = pd.DataFrame({t: const_ohlcv[t]["Low"] for t in tickers})
+    vols = pd.DataFrame({t: const_ohlcv[t]["Volume"] for t in tickers})
+    closes = closes.reindex(dates)
+    highs = highs.reindex(dates)
+    lows = lows.reindex(dates)
+    vols = vols.reindex(dates)
+    ret_1m = closes.pct_change(21) * 100.0
+    sma50 = closes.rolling(50, min_periods=50).mean()
+    prev_close = closes.shift(1)
+    tr = pd.concat([
+        (highs - lows).stack(),
+        (highs - prev_close).abs().stack(),
+        (lows - prev_close).abs().stack(),
+    ], axis=1).max(axis=1).unstack()
+    atr50 = tr.rolling(50, min_periods=50).mean()
+    adr21 = (tr / closes * 100.0).rolling(21, min_periods=21).mean()
+    dollar_vol = (closes * vols).rolling(21, min_periods=21).mean()
+    avg_shares = vols.rolling(21, min_periods=21).mean()
+    out = {}
+    for d in dates:
+        if d not in ret_1m.index:
+            continue
+        liquid = (dollar_vol.loc[d] > 100_000_000) & (avg_shares.loc[d] > 1_000_000)
+        liquid = liquid & ret_1m.loc[d].notna() & sma50.loc[d].notna()
+        cand = ret_1m.loc[d][liquid]
+        if len(cand) == 0:
+            continue
+        n_leaders = max(1, int(math.ceil(len(cand) * 0.02)))
+        top = cand.sort_values(ascending=False).head(n_leaders)
+        leaders = []
+        for t, r1m in top.items():
+            close = _num(closes.loc[d, t])
+            sma = _num(sma50.loc[d, t])
+            atr = _num(atr50.loc[d, t])
+            leaders.append({
+                "ticker": t,
+                "industry": constituents[t][1] or constituents[t][0] or "Other",
+                "ret_1m_pct": round(float(r1m), 2),
+                "extension": round((close - sma) / atr, 2) if close is not None and sma is not None and atr else None,
+                "avg_dollar_vol": int(dollar_vol.loc[d, t]) if pd.notna(dollar_vol.loc[d, t]) else None,
+                "avg_shares": int(avg_shares.loc[d, t]) if pd.notna(avg_shares.loc[d, t]) else None,
+                "adr_pct": round(float(adr21.loc[d, t]), 2) if pd.notna(adr21.loc[d, t]) else None,
+            })
+        # Group summary by GICS sub-industry, top 12 by leaders then
+        # median 1M return. Group RS is the median 1M return minus
+        # RSP's 1M return (percentage points).
+        groups = []
+        bench = bench_1m_by_date.get(d)
+        for industry, tick_list in _group_by_industry(cand.index, constituents).items():
+            med_ret = float(cand[tick_list].median()) if tick_list else None
+            exts = []
+            for t in tick_list:
+                close = _num(closes.loc[d, t])
+                sma = _num(sma50.loc[d, t])
+                atr = _num(atr50.loc[d, t])
+                if close is not None and sma is not None and atr:
+                    exts.append((close - sma) / atr)
+            groups.append({
+                "industry": industry,
+                "leaders": sum(1 for l in leaders if l["industry"] == industry),
+                "liquid_stocks": len(tick_list),
+                "median_ret_1m_pct": round(med_ret, 2) if med_ret is not None else None,
+                "group_rs_pp": round(med_ret - bench, 2) if med_ret is not None and bench is not None else None,
+                "group_extension": round(sorted(exts)[len(exts) // 2], 2) if exts else None,
+            })
+        groups.sort(key=lambda g: (-g["leaders"], -(g["median_ret_1m_pct"] or 0)))
+        out[d] = {
+            "leaders": leaders,
+            "groups": groups[:12],
+            "leaders_count": len(leaders),
+            "universe_count": int(liquid.sum()),
+        }
+    return out
+
+
+def _group_by_industry(tickers, constituents: dict) -> dict:
+    groups: dict[str, list] = {}
+    for t in tickers:
+        groups.setdefault(constituents[t][1] or constituents[t][0] or "Other", []).append(t)
+    return groups
+
+
+# ---------------------------------------------------------------- sessions
+
+def build_sessions(etf_ohlcv: dict, const_ohlcv: dict, constituents: dict,
+                   cot: dict | None, existing_sessions: list[dict]) -> list[dict]:
+    """Build one session dict per close date from raw OHLCV.
+
+    Sections that could not be computed (missing data) are null —
+    never invented. The front end ships with sample sessions for
+    2026-11-13 to 2026-11-20; this appends new sessions in the same
+    shape and never overwrites those samples.
+    """
+    if BENCHMARK not in etf_ohlcv:
+        return []
+    try:
+        import pandas as pd
+    except ImportError:
+        return []
+    bench_frame = etf_ohlcv[BENCHMARK]
+    dates = sorted(bench_frame.index.tolist())
+    # Benchmark 1M returns per date.
+    bench_1m_by_date: dict[str, float | None] = {}
+    for i, d in enumerate(dates):
+        bench_1m_by_date[d] = _ret_at(bench_frame, i, SESSIONS_1M)
+    # Breadth (needs the constituent close matrix).
+    breadth_by_date: dict = {}
+    if const_ohlcv:
+        tickers = [t for t in constituents if t in const_ohlcv]
+        if tickers:
+            closes = pd.DataFrame({t: const_ohlcv[t]["Close"] for t in tickers})
+            spx_frame = etf_ohlcv.get("^GSPC")
+            breadth_by_date = compute_breadth(closes, dates, spx_frame)
+    # Liquid leaders.
+    liquid_by_date: dict = {}
+    if const_ohlcv and constituents:
+        liquid_by_date = compute_liquid(const_ohlcv, constituents, dates, bench_1m_by_date)
+    # Positioning: carry the last published report forward when the
+    # CFTC file is missing or its report date has not moved.
+    positioning = None
+    last_pos = None
+    for sess in reversed(existing_sessions):
+        if sess.get("positioning"):
+            last_pos = sess["positioning"]
+            break
+    if cot is not None:
+        if last_pos is None or cot["report_date"] != last_pos.get("report_date"):
+            markets = _cot_percentiles(cot, existing_sessions)
+            crowded = next(
+                (m["name"] for m in markets.values() if m["state"] == "Crowded Short"),
+                next((m["name"] for m in markets.values() if m["state"] == "Crowded Long"), None),
+            )
+            positioning = {
+                "report_date": cot["report_date"],
+                "crowded": crowded,
+                "markets": [markets[etf] for etf, _, _ in COT_MARKETS],
+            }
+        else:
+            positioning = last_pos
+    else:
+        positioning = last_pos
+    # Strength universes (1M / 5D returns) for percentile ranks.
+    def _universe_returns(rows_def, d):
+        r1m, r5d = [], []
+        for ticker, _ in rows_def:
+            frame = etf_ohlcv.get(ticker)
+            if frame is None or d not in frame.index:
+                continue
+            j = frame.index.tolist().index(d)
+            r1 = _ret_at(frame, j, SESSIONS_1M)
+            r5 = _ret_at(frame, j, 5)
+            if r1 is not None:
+                r1m.append(r1)
+            if r5 is not None:
+                r5d.append(r5)
+        return r1m, r5d
+
     sessions: list[dict] = []
     for i, d in enumerate(dates):
-        if d not in by_ticker.get(BENCHMARK, {}):
-            continue
+        # Tape (8 ETFs).
         tape = []
         for ticker in TAPE:
-            row = by_ticker.get(ticker, {})
-            if d not in row or i == 0:
+            frame = etf_ohlcv.get(ticker)
+            if frame is None or d not in frame.index:
                 continue
-            prev = dates[i - 1]
-            if prev not in row:
+            j = frame.index.tolist().index(d)
+            tape.append(_strength_row(
+                ticker, INDEX_NAMES[ticker], frame, dates, j,
+                bench_1m_by_date[d], [], []))
+        if len(tape) != len(TAPE):
+            continue
+        tape_simple = [{
+            "ticker": r["ticker"],
+            "close": round(float(etf_ohlcv[r["ticker"]]["Close"].loc[d]), 2),
+            "session_pct": r["ret_1d_pct"],
+            "rel_1m_rsp_pct": r["rs_vs_rsp"],
+            "atr_index": r["atr_index"],
+        } for r in tape]
+        # Market Strength groups.
+        sectors = {}
+        for key, rows_def in (
+            ("segments", SEGMENTS),
+            ("equal_weight", EQUAL_WEIGHT_SECTORS),
+            ("spdr", SPDR_SECTORS),
+        ):
+            u1m, u5d = _universe_returns(rows_def, d)
+            rows = []
+            for ticker, name in rows_def:
+                frame = etf_ohlcv.get(ticker)
+                if frame is None or d not in frame.index:
+                    continue
+                j = frame.index.tolist().index(d)
+                row = _strength_row(ticker, name, frame, dates, j,
+                                    bench_1m_by_date[d], u1m, u5d)
+                if row:
+                    rows.append(row)
+            sectors[key] = rows
+        # Industries (173).
+        u1m, u5d = _universe_returns(IND_LIST, d)
+        industries = []
+        for ticker, name in IND_LIST:
+            frame = etf_ohlcv.get(ticker)
+            if frame is None or d not in frame.index:
                 continue
-            one_d = pct(row[d], row[prev])
-            # 1M = 21 sessions back, vs RSP over the same window
-            j = max(0, i - SESSIONS_1M)
-            d_1m = dates[j]
-            if d_1m not in row or d_1m not in by_ticker[BENCHMARK]:
-                continue
-            ret_1m = pct(row[d], row[d_1m])
-            bench_1m = pct(by_ticker[BENCHMARK][d], by_ticker[BENCHMARK][d_1m])
-            rel_1m = None if ret_1m is None or bench_1m is None else round(ret_1m - bench_1m, 2)
-            tape.append({
-                "ticker": ticker,
-                "close": round(row[d], 2),
-                "session_pct": one_d,
-                "rel_1m_rsp_pct": rel_1m,
-                # ATR index needs a 14-day ATR; leave null until
-                # scripts/compute_atr.py (or the front-end sample) fills it.
-                "atr_index": None,
-            })
-        if len(tape) == len(TAPE):
-            sessions.append({"close_date": d, "tape": tape})
+            j = frame.index.tolist().index(d)
+            row = _strength_row(ticker, name, frame, dates, j,
+                                bench_1m_by_date[d], u1m, u5d)
+            if row:
+                industries.append(row)
+        industries.sort(key=lambda r: (r["rs_vs_rsp"] is None, -(r["rs_vs_rsp"] or 0)))
+        breadth = breadth_by_date.get(d)
+        spx_frame = etf_ohlcv.get("^GSPC")
+        if breadth:
+            spx_close = breadth["spx_close"]
+        elif spx_frame is not None and d in spx_frame.index:
+            spx_close = _num(spx_frame["Close"].loc[d])
+        else:
+            spx_close = None
+        spx_1d = breadth["spx_session_pct"] if breadth else None
+        leader = industries[0] if industries else None
+        session = {
+            "close_date": d,
+            "tape": tape_simple,
+            "spx_close": spx_close,
+            "spx_session_pct": spx_1d,
+            "breadth_up": breadth["daily_up"] if breadth else None,
+            "breadth_down": breadth["daily_down"] if breadth else None,
+            "breadth": breadth,
+            "sectors": sectors if any(sectors.values()) else None,
+            "industries": industries if industries else None,
+            "positioning": positioning,
+            "liquid": liquid_by_date.get(d),
+            "leader_1m": leader["ticker"] if leader else None,
+            "leader_1m_rsp_pct": leader["rs_vs_rsp"] if leader else None,
+            "positioning_crowded_short": positioning.get("crowded") if positioning else None,
+        }
+        sessions.append(session)
     return sessions
 
+
+# ---------------------------------------------------------------- main
 
 def main() -> int:
     existing = {"as_of": None, "sessions": []}
@@ -140,21 +1029,56 @@ def main() -> int:
         try:
             existing = json.loads(DATA_PATH.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            print(f"WARNING: {DATA_PATH} is not valid JSON; starting fresh", file=sys.stderr)
-    have = {s.get("close_date") for s in existing.get("sessions", [])}
-    closes = fetch_closes()
-    if not closes:
-        print("No data fetched; leaving history.json unchanged.")
+            print(f"WARNING: {DATA_PATH} is not valid JSON; starting fresh",
+                  file=sys.stderr)
+    existing_sessions = existing.get("sessions", [])
+    have = {s.get("close_date") for s in existing_sessions}
+
+    etf_tickers = sorted({*TAPE, "^GSPC",
+                          *[t for t, _ in SEGMENTS],
+                          *[t for t, _ in EQUAL_WEIGHT_SECTORS],
+                          *[t for t, _ in SPDR_SECTORS],
+                          *[t for t, _ in IND_LIST]})
+    print(f"Fetching ETF OHLCV for {len(etf_tickers)} tickers ...")
+    etf_ohlcv = fetch_etf_ohlcv(etf_tickers)
+    if BENCHMARK not in etf_ohlcv:
+        print("No benchmark data fetched; leaving history.json unchanged.")
         return 0
-    new_sessions = [s for s in build_sessions(closes) if s["close_date"] not in have]
+
+    print("Fetching constituent lists ...")
+    constituents = fetch_constituents()
+    const_ohlcv: dict = {}
+    if constituents:
+        print(f"Fetching constituent OHLCV for {len(constituents)} tickers ...")
+        const_ohlcv = fetch_ohlcv(sorted(constituents), period="6mo")
+        if not const_ohlcv:
+            print("Constituent OHLCV fetch failed; breadth/liquid will be null.")
+    else:
+        print("Constituent lists unavailable; breadth/liquid will be null.")
+
+    print("Fetching CFTC COT ...")
+    cot = fetch_cot()
+    if cot is None:
+        print("COT unavailable; carrying forward the last published report.")
+
+    new_sessions = [s for s in build_sessions(
+        etf_ohlcv, const_ohlcv, constituents, cot, existing_sessions)
+        if s["close_date"] not in have]
     if not new_sessions:
         print("No new sessions to append.")
         return 0
     existing["sessions"] = sorted(
-        existing.get("sessions", []) + new_sessions,
+        existing_sessions + new_sessions,
         key=lambda s: s.get("close_date", ""),
     )
     existing["as_of"] = existing["sessions"][-1]["close_date"]
+    existing["note"] = (
+        "Sessions built by scripts/fetch_data.py. Tape, Market Strength, "
+        "Industry (173 ETFs), Breadth (S&P 500 constituents), Positioning "
+        "(CFTC legacy COT, last published report) and Liquid Leadership "
+        "(S&P 500 + Nasdaq-100, top 2% by 1M return). Sections that could "
+        "not be fetched are null, never invented."
+    )
     DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     DATA_PATH.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
     print(f"Appended {len(new_sessions)} session(s); as_of={existing['as_of']}")

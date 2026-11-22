@@ -1,4 +1,28 @@
 <!doctype html>
+<!--
+  KKS data file: data/history.json — same folder as this page, fetched on load (relative path).
+  Accepted containers: { "sessions": { "YYYY-MM-DD": {session}, ... } },
+  an array of { "date": "YYYY-MM-DD", ...session } objects, or a bare "YYYY-MM-DD" -> session map.
+  Every field of a session is optional; a section that is missing keeps the embedded snapshot
+  for that date, so no panel ever renders blank. A session with only "tape" updates just the tape.
+  Session shape, per close date:
+    tape:        [ {t, close, d, m, atr} x8 ]   ETF ticker, close, 1D %, 1M % vs RSP, ATR index
+    breadth:     { daily:[up,down] (±4%), r5, r10 (5D / 10D ratios),
+                   quarter:[up,down] (±25%), month25:[up,down] (±25%), month50:[up,down] (±50%),
+                   d34:[up,down] (34D ±13%), above (% above 40D average), spx (SPX close), spxPct (SPX 1D %) }
+    sectors:     { segments:[row], ew:[row], spdr:[row] }   Market segments / Equal-weight sectors / SPDR sectors
+    industries:  [ row x173 ]                 Industry ETFs, same row shape as sectors
+      row = { t, name, rs (RS 1M %), thrust (RS Thrust %), atr (50D ATR index),
+              intra (Intraday %), d1 (1D %), m1 (1M %), off (% off 52W high) }   (RS vs RSP bar derives from rs)
+    positioning: { report:"YYYY-MM-DD", markets:[ x10 ] }
+      market = { etf, name, px, lg, sm, cm (Large specs / Small specs / Commercials percentiles),
+                 net (net long/short contracts, signed), wk (weekly change, percentile pts), range5y:[low,high] }
+    liquid:      { period:"1M",
+                   groups:[ {name, stocks, leaders, avg} x12 ],
+                   leaders:[ {t, group, ret (1M return %), ext (extension %), vol (avg $ vol, $M),
+                              shares (avg shares, M), adr (ADR %)} ] }
+  Percentages are plain numbers (e.g. -3.6 means -3.6%) and render to 1 decimal place.
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -115,6 +139,71 @@ td .subname{display:block;font-weight:400;color:var(--muted);font-size:11.5px;ma
 .tv-note a{color:var(--green);font-weight:600;font-size:13px;white-space:nowrap}
 @media(max-width:1100px){.tape{grid-template-columns:repeat(4,1fr)}.main-grid{grid-template-columns:1fr 1fr}.pos-grid{grid-template-columns:1fr 1fr}.summary{grid-template-columns:1fr 1fr}}
 @media(max-width:680px){.wrap{padding:8px 10px 22px}.summary,.main-grid,.pos-grid{grid-template-columns:1fr}.tape{grid-template-columns:repeat(2,1fr)}.top-links{display:none}.balance{width:110px}.scard h2{font-size:20px}.subbar{padding:10px 12px 2px}}
+/* ---- Multi-page ---- */
+.page{display:none}
+.page.active{display:block}
+.page-title{margin:14px 2px 2px;font-size:22px;letter-spacing:-.01em}
+.page-sub{color:var(--muted);font-size:13px;margin:0 2px 6px}
+.toolbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:12px 0 4px}
+.tbtn{background:var(--panel2);border:1px solid var(--border2);color:var(--muted);border-radius:7px;padding:0 12px;font-weight:600;cursor:pointer;font-size:12.5px}
+.tbtn.active{background:#000;color:#fff;border-color:#000}
+.tbtn .tl{color:inherit;opacity:.65;font-weight:400;margin-left:4px}
+.seg{display:inline-flex;border:1px solid var(--border2);border-radius:7px;overflow:hidden}
+.seg button{background:var(--panel2);border:0;color:var(--muted);padding:0 14px;font-weight:600;cursor:pointer;font-size:12.5px;min-height:36px}
+.seg button.active{background:#000;color:#fff}
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
+.stat-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+.stat-card .k{font-size:11px;letter-spacing:.12em;color:var(--muted);font-weight:700;text-transform:uppercase}
+.stat-card .big{font-size:21px;font-weight:800;margin:6px 0 2px;font-variant-numeric:tabular-nums}
+.stat-card .rowline{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);margin-top:2px}
+.stat-card .rowline b{font-size:13px}
+.bigchart{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-top:12px}
+.bigchart svg{width:100%;height:auto;display:block}
+.tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table.data{font-variant-numeric:tabular-nums}
+table.data th{cursor:pointer;user-select:none;white-space:nowrap}
+table.data th .arr{font-size:10px;margin-left:3px}
+table.data td{white-space:nowrap}
+table.data td.name,table.data th:first-child{white-space:normal}
+.mini{width:86px;height:26px;display:block}
+.mini-lg{width:150px;height:44px;display:block}
+.idx-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
+.idx-card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 12px 10px;min-width:0}
+.idx-card .px{font-size:17px;font-weight:800}
+.idx-card .meta{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);border-top:1px solid #a6a6a6;margin-top:7px;padding-top:7px}
+.idx-card .meta b{font-size:12px}
+.bench-tag{font-size:10px;font-weight:700;letter-spacing:.08em;background:#000;color:#fff;border-radius:4px;padding:2px 6px;text-transform:uppercase}
+.chart-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:10px}
+.chart-card{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+.chart-card .ct{display:flex;justify-content:space-between;align-items:baseline}
+.band-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.band{background:var(--panel2);border:1px solid var(--border2);border-radius:99px;padding:6px 13px;font-size:12.5px;font-weight:600;cursor:pointer;color:var(--muted);min-height:32px}
+.band.active{background:#000;color:#fff;border-color:#000}
+.band b{font-variant-numeric:tabular-nums}
+.filters{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:12px}
+.fld{display:flex;flex-direction:column;gap:4px}
+.fld label{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.04em}
+.fld input,.fld select{background:var(--panel2);border:1px solid var(--border2);color:var(--text);border-radius:7px;padding:0 10px;font-size:13px}
+.fld input[type=number]{width:110px}
+.fld input[type=search]{width:170px}
+.tgl{background:var(--panel2);border:1px solid var(--border2);color:var(--muted);border-radius:7px;padding:0 12px;font-weight:600;cursor:pointer;font-size:12.5px}
+.tgl.on{background:#000;color:#fff;border-color:#000}
+.count-note{color:var(--muted);font-size:12.5px;margin:10px 2px 0}
+.count-note b{color:var(--text)}
+.pos2-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
+.pos2-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+.pos2-card .prow{display:flex;justify-content:space-between;align-items:baseline}
+.pos2-card .sym{font-size:16px;font-weight:800}
+.pos2-card .pname{color:var(--muted);font-size:12px}
+.pos2-card .pprice{font-size:15px;font-weight:700}
+.kv{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);margin-top:5px}
+.kv b{color:var(--text);font-variant-numeric:tabular-nums}
+.status-tag{display:inline-block;font-size:11px;font-weight:700;padding:3px 8px;border-radius:5px;background:rgba(255,255,255,.45);color:var(--green)}
+.status-tag.short{background:rgba(0,0,0,.14);color:#000}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
+@media(max-width:1100px){.stat-grid{grid-template-columns:1fr 1fr}.idx-grid,.chart-grid{grid-template-columns:1fr 1fr}.pos2-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:680px){.stat-grid,.idx-grid,.chart-grid,.pos2-grid{grid-template-columns:1fr}.opt{display:none}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -123,12 +212,11 @@ td .subname{display:block;font-weight:400;color:var(--muted);font-size:11.5px;ma
   <div class="brand"><span class="brand-dot">◉</span> KKS</div>
   <select class="page-select" id="pageSelect" aria-label="Page">
     <option value="debrief" selected>Debrief</option>
-    <option value="breadth">Breadth</option>
-    <option value="strength">Market Strength</option>
-    <option value="industry">Industry Group Strength</option>
+    <option value="environment">Breadth</option>
+    <option value="leadership">Market Strength</option>
+    <option value="industries">Industry Group Strength</option>
     <option value="positioning">Positioning</option>
-    <option value="leadership">Liquid Leadership</option>
-    <option value="screener">Screener</option>
+    <option value="liquid">Liquid Leadership</option>
   </select>
   <div class="date-wrap">
     <input class="date-input" type="date" id="dateInput" value="2026-11-20" min="2026-11-13" max="2026-11-20" aria-label="Close date">
@@ -137,24 +225,25 @@ td .subname{display:block;font-weight:400;color:var(--muted);font-size:11.5px;ma
     <button class="latest-btn" id="latestBtn">Latest</button>
   </div>
   <nav class="top-links" aria-label="Sections">
-    <a href="#tape">Market tape</a><a href="#breadth">Breadth</a><a href="#sectors">Sectors</a><a href="#industries">Industries</a><a href="#positioning">Positioning</a>
+    <a href="#debrief" data-page="debrief" class="active">Debrief</a><a href="#environment" data-page="environment">Breadth</a><a href="#leadership" data-page="leadership">Market Strength</a><a href="#industries" data-page="industries">Industries</a><a href="#positioning" data-page="positioning">Positioning</a><a href="#liquid" data-page="liquid">Liquid</a>
   </nav>
 </header>
 
 <div class="subbar"><div>Based on close <b id="basedOn">2026-11-20</b> <span id="sessionNote" style="color:var(--muted)">· Friday session</span></div><div>1D = last session · 1M = 21 sessions · strength benchmark RSP</div></div>
 
 <main class="wrap">
+ <div class="page active" id="page-debrief">
   <!-- Summary -->
   <section class="summary" id="summaryCards" aria-label="Session summary"></section>
 
   <!-- Market tape -->
-  <div class="sec-head" id="tape"><h3>Market tape <span class="sub">Regular-session intraday · prior-close baseline · extension</span></h3><a class="explore" href="#sectors">Market Strength <span>↗</span></a></div>
+  <div class="sec-head" id="tape"><h3>Market tape <span class="sub">Regular-session intraday · prior-close baseline · extension</span></h3><a class="explore" href="#leadership">Market Strength <span>↗</span></a></div>
   <section class="tape" id="tapeGrid" aria-label="Market tape"></section>
 
   <!-- Main grid -->
   <div class="main-grid">
     <section class="panel" id="breadth">
-      <div class="panel-head"><div><h3>Breadth</h3><p id="breadthDate">Close 2026-11-20</p></div><a class="explore" href="#breadth">Explore <span>↗</span></a></div>
+      <div class="panel-head"><div><h3>Breadth</h3><p id="breadthDate">Close 2026-11-20</p></div><a class="explore" href="#environment">Explore <span>↗</span></a></div>
       <div class="spx-row"><span>SPX</span><span class="px"><span id="spxPx">6,914.4</span> <span class="neg" id="spxPct">-3.64%</span></span></div>
       <table aria-label="Breadth measures"><thead><tr><th>Measure</th><th>Up</th><th>Down</th><th>Balance</th></tr></thead><tbody id="breadthBody"></tbody></table>
       <div class="pressure">
@@ -165,7 +254,7 @@ td .subname{display:block;font-weight:400;color:var(--muted);font-size:11.5px;ma
     </section>
 
     <section class="panel" id="sectors">
-      <div class="panel-head"><div><h3>Sector leadership</h3><p id="sectorDate">1M ranking · ETF close 2026-11-20</p></div><a class="explore" href="#sectors">Explore <span>↗</span></a></div>
+      <div class="panel-head"><div><h3>Sector leadership</h3><p id="sectorDate">1M ranking · ETF close 2026-11-20</p></div><a class="explore" href="#leadership">Explore <span>↗</span></a></div>
       <table aria-label="Sector leadership"><thead><tr><th>Sector</th><th>Session</th><th>1M / RSP</th><th>EW / RSP</th></tr></thead><tbody id="sectorBody"></tbody></table>
       <p class="panel-foot">Top four and bottom two by 1M strength · EW = equal weight</p>
     </section>
@@ -188,9 +277,16 @@ td .subname{display:block;font-weight:400;color:var(--muted);font-size:11.5px;ma
   </section>
 
   <div class="tv-note">
-    <p><b style="color:var(--text)">How this page works:</b> Pick a close date above ( − / + step through trading sessions, Latest jumps to the newest close). Every panel — tape, breadth, sectors, industries and positioning — re-renders for that close, benchmarked to RSP. 1M always means the trailing 21 sessions.</p>
+    <p><b style="color:var(--text)">How this page works:</b> Pick a close date above ( − / + step through trading sessions, Latest jumps to the newest close). Every panel — tape, breadth, sectors, industries and positioning — re-renders for that close, benchmarked to RSP. 1M always means the trailing 21 sessions. Use the page menu (top left) to switch between Debrief, Breadth, Market Strength, Industry Group Strength, Positioning and Liquid Leadership — the selected close carries across all six pages.</p>
     <a href="https://i-manage-risk.github.io/NEL/#debrief" target="_blank" rel="noopener">Original NEL ↗</a>
   </div>
+ </div><!-- /page-debrief -->
+
+ <div class="page" id="page-environment"></div>
+ <div class="page" id="page-leadership"></div>
+ <div class="page" id="page-industries"></div>
+ <div class="page" id="page-positioning"></div>
+ <div class="page" id="page-liquid"></div>
 </main>
 
 <script>
@@ -371,11 +467,656 @@ document.getElementById('dateInput').addEventListener('change', function(e){
   var best=DATES[0]; DATES.forEach(function(d){ if(d<=v) best=d; }); render(best);
 });
 document.getElementById('pageSelect').addEventListener('change', function(e){
-  if(e.target.value!=='debrief'){ alert; /* static demo: other pages not in this Debrief-only build */ e.target.value='debrief';
-    var note=document.querySelector('.tv-note p'); if(note) note.innerHTML='<b style="color:var(--text)">Debrief only in this build:</b> Breadth, Market Strength, Industry Group Strength, Positioning, Liquid Leadership and Screener are separate pages in the full KKS site — this artifact ships the Debrief page first, as requested.';
-  }
+  var v=e.target.value;
+  if(('#'+v)===location.hash){ if(window.__route) window.__route(); }
+  else location.hash = v;
 });
 render("2026-11-20");
+</script>
+<script>
+// ================= KKS multi-page =================
+var PAGES = {debrief:'Debrief', environment:'Breadth', leadership:'Market Strength', industries:'Industry Group Strength', positioning:'Positioning', liquid:'Liquid Leadership'};
+var curPage = 'debrief';
+function curDate(){ return window.current || '2026-11-20'; }
+function dScale(){ var i = DATES.indexOf(curDate()); var s = {0:0.45,1:0.3,2:0.5,3:0.55,4:0.62,5:1}; return (i in s)? s[i] : 1; }
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+function spark2(seedStr, drift, clsName, w, h){
+  var rnd = seedRand('sp2'+seedStr), n=26, pts=[], v=0, i;
+  for(i=0;i<n;i++){ v += drift/n + (rnd()-0.5)*Math.max(1.4,Math.abs(drift))*0.17; pts.push(v); }
+  var min=Math.min.apply(null,pts.concat([0])), max=Math.max.apply(null,pts.concat([0])), pad=2;
+  function X(i){ return pad + i*(w-2*pad)/(n-1); }
+  function Y(val){ var r=(val-min)/((max-min)||1); return h-pad - r*(h-2*pad); }
+  var d='M'+X(0).toFixed(1)+','+Y(pts[0]).toFixed(1);
+  for(var j=1;j<n;j++) d+=' L'+X(j).toFixed(1)+','+Y(pts[j]).toFixed(1);
+  var col = drift>=0 ? 'rgb(117,117,117)' : 'rgb(0,0,0)';
+  return '<svg class="'+(clsName||'mini')+'" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none" aria-hidden="true"><path d="'+d+'" fill="none" stroke="'+col+'" stroke-width="1.4" stroke-linejoin="round"/></svg>';
+}
+function downloadSymbols(name, text){
+  var b=new Blob([text],{type:'text/plain'}), u=URL.createObjectURL(b), a=document.createElement('a');
+  a.href=u; a.download=name; document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(u); if(a.parentNode) a.parentNode.removeChild(a); }, 400);
+}
+function route(){
+  var h=(location.hash||'#debrief').slice(1);
+  if(!PAGES[h]) h='debrief';
+  curPage=h;
+  var ps=document.querySelectorAll('.page'), i;
+  for(i=0;i<ps.length;i++) ps[i].classList.toggle('active', ps[i].id==='page-'+h);
+  var links=document.querySelectorAll('.top-links a');
+  for(i=0;i<links.length;i++) links[i].classList.toggle('active', links[i].getAttribute('data-page')===h);
+  var sel=document.getElementById('pageSelect'); if(sel && sel.value!==h) sel.value=h;
+  document.title='KKS — '+PAGES[h];
+  renderPage();
+  window.scrollTo(0,0);
+}
+window.__route = route;
+window.addEventListener('hashchange', route);
+function renderPage(){ var f=RENDERERS[curPage]; if(f) f(); }
+['prevBtn','nextBtn','latestBtn'].forEach(function(id){ document.getElementById(id).addEventListener('click', function(){ renderPage(); }); });
+document.getElementById('dateInput').addEventListener('change', function(){ renderPage(); });
+
+// ================= Breadth history (120 sessions) =================
+var BHIST = (function(){
+  var hol={'2026-06-19':1,'2026-07-03':1,'2026-09-07':1};
+  function iso(x){ return x.toISOString().slice(0,10); }
+  var days=[], d=new Date(Date.UTC(2026,10,20));
+  while(days.length<120){ var k=iso(d), dow=d.getUTCDay(); if(dow!==0&&dow!==6&&!hol[k]) days.unshift(k); d.setUTCDate(d.getUTCDate()-1); }
+  var rnd=seedRand('bhist2026');
+  var spx=new Array(120); spx[117]=7236.0; spx[118]=7175.2; spx[119]=6914.4;
+  var i;
+  for(i=116;i>=0;i--){ var chg=(rnd()-0.44)*1.35; spx[i]=+(spx[i+1]/(1+chg/100)).toFixed(1); }
+  var above=new Array(120), ab=57;
+  for(i=0;i<120;i++){ ab += (rnd()-0.56)*3.4; if(ab>76)ab=76; if(ab<17)ab=17; above[i]=+ab.toFixed(1); }
+  var anchors={
+    '2026-11-18':{du:264,dd:96, q:[588,1498], s:[1012,2088], m25:[121,342], m50:[22,49], r5:0.38, r10:0.73, above:30.6},
+    '2026-11-19':{du:118,dd:402, q:[512,1640], s:[934,2210], m25:[96,388], m50:[18,54], r5:0.34, r10:0.70, above:31.8},
+    '2026-11-20':{du:75,dd:1071, q:[467,1851], s:[852,2494], m25:[67,460], m50:[14,61], r5:0.23, r10:0.51, above:26.2}
+  };
+  var rows=days.map(function(day,idx){
+    var pct = idx>0 ? (spx[idx]/spx[idx-1]-1)*100 : 0.4;
+    var r=seedRand('bh'+day);
+    function pair(base, sens, cap){ var u=Math.max(4, Math.round(base + pct*sens + (r()-0.5)*base*0.7)); var dn=Math.max(4, Math.round(base - pct*sens + (r()-0.5)*base*0.7)); return [Math.min(u,cap), Math.min(dn,cap)]; }
+    var daily=pair(300, 210, 1450), q=pair(1050, 120, 2600), s34=pair(1650, 90, 2900), m25=pair(240, 45, 700), m50=pair(36, 9, 130);
+    var row={date:day, du:daily[0], dd:daily[1], q:q, s:s34, m25:m25, m50:m50,
+      r5:+(Math.max(0.08, Math.min(2.6, 0.62 + pct*0.16 + (r()-0.5)*0.22))).toFixed(2),
+      r10:+(Math.max(0.1, Math.min(2.4, 0.78 + pct*0.1 + (r()-0.5)*0.18))).toFixed(2),
+      above:above[idx], spx:spx[idx], pct:+pct.toFixed(2)};
+    var a=anchors[day];
+    if(a){ row.du=a.du; row.dd=a.dd; row.q=a.q; row.s=a.s; row.m25=a.m25; row.m50=a.m50; row.r5=a.r5; row.r10=a.r10; row.above=a.above; }
+    return row;
+  });
+  return rows;
+})();
+function bhRow(date){ for(var i=BHIST.length-1;i>=0;i--){ if(BHIST[i].date<=date) return BHIST[i]; } return BHIST[0]; }
+
+var bPeriod='1M';
+var BPERIODS=[['1W','Fast',5],['1M','Swing',21],['3M','Trend',63],['6M','Cycle',120],['1Y','Long',120],['3Y','Regime',120],['5Y','Secular',120],['All time','',120]];
+function breadthChart(rows){
+  var W=920,H=270,pl=44,pr=56,pt=14,pb=26, iw=W-pl-pr, ih=H-pt-pb;
+  var spMin=Math.min.apply(null,rows.map(function(r){return r.spx;})), spMax=Math.max.apply(null,rows.map(function(r){return r.spx;}));
+  function X(i){ return pl + i*iw/(rows.length-1); }
+  function Ya(v){ return pt + (100-v)/100*ih; }
+  function Ys(v){ return pt + (spMax-v)/((spMax-spMin)||1)*ih; }
+  var pa='', ps='', i;
+  for(i=0;i<rows.length;i++){ pa+=(i?' L':'M')+X(i).toFixed(1)+','+Ya(rows[i].above).toFixed(1); ps+=(i?' L':'M')+X(i).toFixed(1)+','+Ys(rows[i].spx).toFixed(1); }
+  var grid='';
+  [0,25,50,75,100].forEach(function(g){ grid+='<line x1="'+pl+'" y1="'+Ya(g)+'" x2="'+(W-pr)+'" y2="'+Ya(g)+'" stroke="#a6a6a6" stroke-width="1"/><text x="'+(pl-6)+'" y="'+(Ya(g)+4)+'" text-anchor="end" font-size="10.5" fill="#595959">'+g+'%</text>'; });
+  return '<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Above 40-day average and SPX chart">'
+    + grid
+    + '<path d="'+pa+'" fill="none" stroke="#141414" stroke-width="2"/>'
+    + '<path d="'+ps+'" fill="none" stroke="rgb(117,117,117)" stroke-width="1.6" stroke-dasharray="5 3"/>'
+    + '<text x="'+pl+'" y="'+(H-6)+'" font-size="10.5" fill="#595959">'+rows[0].date+'</text>'
+    + '<text x="'+(W-pr)+'" y="'+(H-6)+'" text-anchor="end" font-size="10.5" fill="#595959">'+rows[rows.length-1].date+'</text>'
+    + '<text x="'+(W-pr+6)+'" y="'+(Ys(rows[rows.length-1].spx)+4)+'" font-size="10.5" fill="#595959">SPX '+rows[rows.length-1].spx.toLocaleString()+'</text>'
+    + '</svg>'
+    + '<div class="legend"><span><i style="background:#141414"></i>Above 40D % (left)</span><span><i style="background:rgb(117,117,117)"></i>SPX (right, dashed)</span></div>';
+}
+function renderBreadth(){
+  var el=document.getElementById('page-environment'); if(!el) return;
+  var date=curDate(), row=bhRow(date), sc=dScale();
+  var upto=BHIST.filter(function(r){ return r.date<=date; });
+  var win=BPERIODS.filter(function(p){return p[0]===bPeriod;})[0] || BPERIODS[1];
+  var chartRows=upto.slice(-win[2]);
+  function upDown(u,dn){ return '<div class="rowline"><span>Up</span><b class="pos">'+u.toLocaleString()+'</b></div><div class="rowline"><span>Down</span><b class="neg">'+dn.toLocaleString()+'</b></div>'; }
+  var cards=
+    '<article class="stat-card"><div class="k">Daily ±4% moves</div><div class="big '+(row.du-row.dd>=0?'pos':'neg')+'">'+(row.du-row.dd>0?'+':'')+(row.du-row.dd).toLocaleString()+' net</div>'+upDown(row.du,row.dd)+'</article>'
+    +'<article class="stat-card"><div class="k">Quarter ±25%</div><div class="big">'+(row.q[0]+row.q[1]).toLocaleString()+' stocks</div>'+upDown(row.q[0],row.q[1])+'</article>'
+    +'<article class="stat-card"><div class="k">34-session ±13%</div><div class="big">'+(row.s[0]+row.s[1]).toLocaleString()+' stocks</div>'+upDown(row.s[0],row.s[1])+'</article>'
+    +'<article class="stat-card"><div class="k">Month ±25%</div><div class="big">'+(row.m25[0]+row.m25[1]).toLocaleString()+' stocks</div>'+upDown(row.m25[0],row.m25[1])+'</article>'
+    +'<article class="stat-card"><div class="k">Month ±50%</div><div class="big">'+(row.m50[0]+row.m50[1]).toLocaleString()+' stocks</div>'+upDown(row.m50[0],row.m50[1])+'</article>'
+    +'<article class="stat-card"><div class="k">5D ratio</div><div class="big '+(row.r5>=1?'pos':'neg')+'">'+row.r5.toFixed(2)+'×</div><div class="rowline"><span>Up ÷ down thrust, 5 sessions</span></div></article>'
+    +'<article class="stat-card"><div class="k">10D ratio</div><div class="big '+(row.r10>=1?'pos':'neg')+'">'+row.r10.toFixed(2)+'×</div><div class="rowline"><span>Up ÷ down thrust, 10 sessions</span></div></article>'
+    +'<article class="stat-card"><div class="k">Above 40D average</div><div class="big">'+row.above+'%</div><div class="rowline"><span>SPX</span><b>'+row.spx.toLocaleString()+' <span class="'+cls(row.pct)+'">'+fmt(row.pct)+'</span></b></div></article>';
+  var btns=BPERIODS.map(function(p){ return '<button class="tbtn'+(p[0]===bPeriod?' active':'')+'" data-bp="'+p[0]+'">'+p[0]+(p[1]?'<span class="tl">'+p[1]+'</span>':'')+'</button>'; }).join('');
+  var hist=upto.slice().reverse().map(function(r){
+    return '<tr><td class="name">'+r.date+'</td><td class="pos" style="font-weight:700">'+r.du.toLocaleString()+'</td><td class="neg" style="font-weight:700">'+r.dd.toLocaleString()+'</td>'
+      +'<td class="'+(r.r5>=1?'pos':'neg')+'" style="font-weight:700">'+r.r5.toFixed(2)+'×</td><td class="'+(r.r10>=1?'pos':'neg')+'" style="font-weight:700">'+r.r10.toFixed(2)+'×</td>'
+      +'<td class="opt">'+r.q[0].toLocaleString()+'</td><td class="opt">'+r.q[1].toLocaleString()+'</td>'
+      +'<td class="opt">'+r.m25[0].toLocaleString()+'</td><td class="opt">'+r.m25[1].toLocaleString()+'</td>'
+      +'<td class="opt">'+r.m50[0].toLocaleString()+'</td><td class="opt">'+r.m50[1].toLocaleString()+'</td>'
+      +'<td>'+r.s[0].toLocaleString()+'</td><td>'+r.s[1].toLocaleString()+'</td>'
+      +'<td style="font-weight:700">'+r.above+'%</td><td>'+r.spx.toLocaleString()+'</td></tr>';
+  }).join('');
+  el.innerHTML=
+    '<h2 class="page-title">Breadth</h2><p class="page-sub">Market environment · close '+date+' · participation and thrust across the full US universe</p>'
+    +'<div class="toolbar" role="group" aria-label="Breadth period">'+btns+'</div>'
+    +'<section class="stat-grid">'+cards+'</section>'
+    +'<section class="bigchart"><div class="panel-head"><div><h3 style="margin:0;font-size:15px">Above 40-day average vs SPX</h3><p style="margin:3px 0 0;color:var(--muted);font-size:12.5px">'+win[0]+(win[1]?' · '+win[1]:'')+' window · '+chartRows.length+' sessions in this snapshot (history from 2026-06-03)</p></div></div>'+breadthChart(chartRows)+'</section>'
+    +'<div class="sec-head"><h3>History <span class="sub">'+upto.length+' sessions · '+upto[0].date+' to '+date+'</span></h3></div>'
+    +'<section class="panel"><div class="tscroll"><table class="data" aria-label="Breadth history"><thead><tr><th>Date</th><th>Daily ±4% Up</th><th>Daily ±4% Down</th><th>5D ratio</th><th>10D ratio</th><th class="opt">Quarter ±25% Up</th><th class="opt">Quarter ±25% Down</th><th class="opt">Month ±25% Up</th><th class="opt">Month ±25% Down</th><th class="opt">Month ±50% Up</th><th class="opt">Month ±50% Down</th><th>34D ±13% Up</th><th>34D ±13% Down</th><th>Above 40D</th><th>SPX</th></tr></thead><tbody>'+hist+'</tbody></table></div>'
+    +'<p class="foot-note">Breadth counts cover the full US-listed universe. Intraday &amp; daily prices via Stooq / Yahoo Finance; charts reference TradingView. Data loads from data/history.json when available; otherwise the embedded snapshot is shown.</p></section>';
+  var bs=el.querySelectorAll('[data-bp]');
+  for(var i=0;i<bs.length;i++) bs[i].addEventListener('click', function(){ bPeriod=this.getAttribute('data-bp'); renderBreadth(); });
+}
+
+// ================= Market Strength / Industry strength =================
+var RSP_M1 = -3.4; // RSP absolute 1M return at the 2026-11-20 close; RS values are relative to it
+function mkStrength(t, name, rs, d1, seedKey, atrBase, offBase){
+  var r=seedRand('str'+seedKey+t);
+  return {t:t, name:name, rs:rs, d1:d1,
+    thrust:Math.max(4, Math.min(118, Math.round(86 + rs*1.7 + (r()-0.5)*14))),
+    atr:+(atrBase + (r()-0.5)*0.5).toFixed(2),
+    off:+(-(Math.abs(offBase) + r()*14)).toFixed(1),
+    intra:+(d1*0.6 + (r()-0.5)*1.2).toFixed(2)};
+}
+function scaledRow(row){
+  var sc=dScale(), out={};
+  for(var k in row) out[k]=row[k];
+  if(curDate()!=='2026-11-20'){ out.rs=+(row.rs*sc).toFixed(1); out.d1=+(row.d1*(0.35+0.4*sc)).toFixed(2); out.thrust=Math.max(4,Math.round(row.thrust*(0.7+0.3*sc))); out.intra=+(row.intra*sc).toFixed(2); }
+  out.m1=+(out.rs + RSP_M1*(curDate()==='2026-11-20'?1:sc)).toFixed(1);
+  return out;
+}
+var INDEX_ROWS=[
+  mkStrength('SPY','S&P 500',-5.0,-3.64,'idx',1.02,-9.4),
+  mkStrength('QQQ','Nasdaq 100',-9.1,-5.67,'idx',1.31,-13.8),
+  mkStrength('IWM','Russell 2000',-2.4,-2.88,'idx',0.94,-7.6),
+  mkStrength('DIA','Dow Jones Industrial',-4.1,-1.98,'idx',0.88,-6.9),
+  mkStrength('RSP','S&P 500 equal weight',0,-1.98,'idx',0.76,-5.8),
+  mkStrength('QQQE','Nasdaq 100 equal weight',-5.7,-4.08,'idx',1.05,-11.2),
+  mkStrength('SPMO','S&P 500 momentum',-10.5,-4.80,'idx',1.22,-12.6),
+  mkStrength('TLT','20Y+ Treasury',4.8,1.37,'idx',0.52,-3.1)
+];
+var INDEX_PX={SPY:691.44,QQQ:618.30,IWM:238.60,DIA:462.10,RSP:178.40,QQQE:88.20,SPMO:96.50,TLT:92.30};
+var TAPE19={SPY:-0.84,QQQ:-1.32,IWM:-0.61,DIA:-0.48,RSP:-0.52,QQQE:-0.97,SPMO:-1.58,TLT:0.42};
+var SEGMENT_ROWS=[
+  mkStrength('SPY','Large cap',-5.0,-3.64,'seg',1.02,-9.4),
+  mkStrength('QQQ','Large cap growth',-9.1,-5.67,'seg',1.31,-13.8),
+  mkStrength('IVE','Large cap value',-1.6,-1.42,'seg',0.71,-4.9),
+  mkStrength('MDY','Mid cap',-1.1,-1.86,'seg',0.83,-6.1),
+  mkStrength('IWM','Small cap',-2.4,-2.88,'seg',0.94,-7.6),
+  mkStrength('RSP','Equal weight',0,-1.98,'seg',0.76,-5.8),
+  mkStrength('SPMO','Momentum',-10.5,-4.80,'seg',1.22,-12.6),
+  mkStrength('SCHD','Dividend',0.8,-0.64,'seg',0.58,-3.4),
+  mkStrength('USMV','Low volatility',1.9,-0.38,'seg',0.49,-2.6)
+];
+var EW_SECTOR_ROWS=[
+  mkStrength('RSPS','Consumer staples EW',5.4,0.7,'ews',0.55,-2.2),
+  mkStrength('RSPU','Utilities EW',5.0,-0.7,'ews',0.61,-2.8),
+  mkStrength('RSPR','Real estate EW',3.8,-1.0,'ews',0.72,-4.4),
+  mkStrength('RSPD','Discretionary EW',3.2,-3.0,'ews',0.97,-8.1),
+  mkStrength('RSPI','Industrials EW',2.4,-1.6,'ews',0.8,-5.2),
+  mkStrength('RSPH','Health care EW',1.8,-0.9,'ews',0.66,-3.9),
+  mkStrength('RSPF','Financials EW',0.6,-1.2,'ews',0.74,-4.6),
+  mkStrength('RSPM','Materials EW',-1.5,-1.4,'ews',0.85,-6.3),
+  mkStrength('RSPC','Communication EW',-4.2,-2.6,'ews',1.08,-9.8),
+  mkStrength('RSPE','Energy EW',-6.9,-0.6,'ews',1.12,-10.4),
+  mkStrength('RSPT','Technology EW',-12.0,-7.3,'ews',1.38,-15.1)
+];
+var SPDR_ROWS=[
+  mkStrength('XLP','Staples',5.7,0.7,'spd',0.54,-2.1),
+  mkStrength('XLRE','Real Estate',5.0,-1.0,'spd',0.7,-4.2),
+  mkStrength('XLU','Utilities',4.8,-0.7,'spd',0.6,-2.7),
+  mkStrength('XLY','Discretionary',2.9,-3.0,'spd',0.95,-7.9),
+  mkStrength('XLV','Health Care',2.1,-1.1,'spd',0.64,-3.6),
+  mkStrength('XLI','Industrials',1.4,-1.7,'spd',0.79,-5.0),
+  mkStrength('XLF','Financials',0.9,-1.3,'spd',0.73,-4.4),
+  mkStrength('XLB','Materials',-2.2,-1.5,'spd',0.84,-6.0),
+  mkStrength('XLE','Energy',-5.8,-0.6,'spd',1.1,-10.1),
+  mkStrength('XLC','Communication',-6.5,-2.9,'spd',1.06,-9.5),
+  mkStrength('XLK','Technology',-14.0,-7.3,'spd',1.4,-15.6)
+];
+var IND_LIST=[
+['UNG','Natural gas'],['BOIL','Natural gas 2x'],['KOLD','Natural gas inverse'],['USO','WTI crude oil'],['UCO','Crude oil 2x'],['SCO','Crude oil inverse'],['FCG','Natural gas equities'],['XOP','Oil & gas E&P'],['OIH','Oil services'],['XES','Oil equipment'],['AMJ','MLPs'],['MLPX','Midstream energy'],
+['PHO','Water'],['FIW','Water resources'],['CGW','Global water'],
+['JETS','Airlines'],['AWAY','Travel technology'],
+['RTH','Retail'],['XRT','Retail equal weight'],['IBUY','Online retail'],['ONLN','Online retail pro'],['CLIX','Long online / short stores'],['EBIZ','E-commerce'],
+['IHI','Medical equipment'],['XHE','Health care equipment'],['XBI','Biotechnology SPDR'],['IBB','Biotechnology'],['PBE','Biotech & genome'],['XPH','Pharmaceuticals'],['PPH','Pharmaceutical portfolio'],['LABU','Biotech 3x'],['LABD','Biotech -3x'],['ARKG','Genomic revolution'],
+['KRE','Regional banks'],['KBWB','Bank portfolio'],['KBE','Bank equal weight'],['KBWR','Regional banking'],['FINX','Fintech'],['IPAY','Payments'],['ARKF','Fintech innovation'],
+['XSD','Semiconductor equal weight'],['SOXL','Semiconductor 3x'],['SOXS','Semiconductor -3x'],['SMH','Semiconductors'],['SOXX','Semiconductor index'],['PSI','Semiconductor dynamic'],['XSW','Software & services'],['HACK','Cybersecurity'],['CIBR','Cybersecurity Nasdaq'],['SKYY','Cloud computing'],['CLOU','Cloud computing global'],['WCLD','Cloud software'],['BOTZ','Robotics & AI'],['ROBO','Robotics automation'],['ARKQ','Autonomous technology'],['ARKW','Next generation internet'],['ARKK','Innovation'],['QTUM','Quantum computing'],
+['XME','Metals & mining'],['COPX','Copper miners'],['PICK','Mining & metals'],['GDX','Gold miners'],['GDXJ','Junior gold miners'],['SIL','Silver miners'],['SLVP','Silver miners iShares'],['URA','Uranium'],['URNM','Uranium miners'],['LIT','Lithium & battery'],['REMX','Rare earth metals'],['SGDM','Gold miners sponsor'],['GOEX','Gold explorers'],['RING','Gold miners iShares'],
+['XHB','Homebuilders'],['ITB','Home construction'],['NAIL','Homebuilders 3x'],
+['PBW','Clean energy'],['TAN','Solar'],['FAN','Wind energy'],['ICLN','Clean energy global'],['QCLN','Clean energy index'],['ACES','Clean energy solutions'],['SMOG','Low carbon energy'],['KRBN','Carbon allowances'],
+['DBA','Agriculture'],['CORN','Corn fund'],['WEAT','Wheat fund'],['SOYB','Soybean fund'],['CANE','Sugar fund'],
+['IYR','US real estate'],['SCHH','US REIT'],['REM','Mortgage REITs'],['MORT','Mortgage REIT income'],
+['ESPO','Video gaming'],['GAMR','Gaming & eSports'],['HERO','Gaming heroes'],['SOCL','Social media'],['MILN','Millennials'],['GNOM','Genomics & biotech'],['BUG','Cybersecurity bug'],['DRIV','Electric vehicles'],['KARS','Electric vehicles Krane'],
+['KWEB','China internet'],['CQQQ','China technology'],['MCHI','China'],['FXI','China large cap'],['EWH','Hong Kong'],['EWT','Taiwan'],['EWJ','Japan'],['EWZ','Brazil'],['EWW','Mexico'],['INDA','India'],['INDY','India 50'],['VNM','Vietnam'],['TUR','Turkey'],['GREK','Greece'],['EWP','Spain'],['EWI','Italy'],['EWG','Germany'],['EPU','Peru'],['ARGT','Argentina'],['GXG','Colombia'],['ECH','Chile'],['NORW','Norway'],['EIRL','Ireland'],
+['UVXY','Volatility 1.5x'],['VIXY','Volatility futures'],['SVXY','Volatility inverse'],['VXX','Volatility note'],['TQQQ','Nasdaq 3x'],['SQQQ','Nasdaq -3x'],['SPXL','S&P 500 3x'],['SPXS','S&P 500 -3x'],['UPRO','S&P 500 3x pro'],['TNA','Small cap 3x'],['TZA','Small cap -3x'],['FAS','Financial 3x'],['FAZ','Financial -3x'],['NUGT','Gold miners 2x'],['DUST','Gold miners -2x'],['JNUG','Junior miners 2x'],['JDST','Junior miners -2x'],['ERX','Energy 2x'],['ERY','Energy -2x'],['GUSH','Oil & gas 2x'],['DRIP','Oil & gas -2x'],['DIG','Oil & gas 2x pro'],['DUG','Oil & gas -2x pro'],['UYM','Materials 2x'],['SMN','Materials -2x'],['DDM','Dow 2x'],['DXD','Dow -2x'],['QID','Nasdaq -2x'],['SDS','S&P 500 -2x'],['SSO','S&P 500 2x'],['QLD','Nasdaq 2x'],['UDOW','Dow 3x'],['SDOW','Dow -3x'],
+['TMF','Treasury 3x'],['TMV','Treasury -3x'],['TBT','Treasury -2x'],['PST','Treasury -2x ultra'],['TTT','Treasury -3x pro'],
+['IBIT','Bitcoin trust'],['ETHA','Ether trust'],['BITO','Bitcoin futures'],['ETHE','Ethereum trust'],['GBTC','Bitcoin trust Grayscale'],['FDIG','Digital payments'],
+['VCX','Private technology'],['ARKX','Space exploration'],['UFO','Space industry'],['SVIX','Short volatility futures'],['MOON','Moonshot innovators']
+];
+var IND_FIXED={UNG:12.3, PHO:7.4, JETS:6.6, RTH:6.2, IHI:6.2};
+var IND_ROWS=(function(){
+  var rest=IND_LIST.filter(function(x){ return !(x[0] in IND_FIXED) && x[0]!=='SVIX'; });
+  var rnd=seedRand('indshuffle');
+  for(var i=rest.length-1;i>0;i--){ var j=Math.floor(rnd()*(i+1)); var tmp=rest[i]; rest[i]=rest[j]; rest[j]=tmp; }
+  var rows=[], n=rest.length;
+  var top=IND_LIST.filter(function(x){ return x[0] in IND_FIXED; }).sort(function(a,b){ return IND_FIXED[b[0]]-IND_FIXED[a[0]]; });
+  top.forEach(function(x){ rows.push(mkStrength(x[0], x[1], IND_FIXED[x[0]], x[0]==='UNG'?2.9:+(seedRand('id1'+x[0])()*4-2.4).toFixed(2), 'ind', 0.9, -6)); });
+  rest.forEach(function(x,idx){
+    var rs=+(6.0 - (idx/(n-1))*44.5 + (seedRand('irs'+x[0])()-0.5)*1.6).toFixed(1);
+    var d1=+((seedRand('id1'+x[0])()-0.62)*7).toFixed(2);
+    rows.push(mkStrength(x[0], x[1], rs, d1, 'ind', 0.95, -12));
+  });
+  var sv=IND_LIST.filter(function(x){ return x[0]==='SVIX'; })[0];
+  rows.push(mkStrength(sv[0], sv[1], -39.9, -6.4, 'ind', 1.6, -44));
+  return rows;
+})();
+var strSort={}; // sectionId -> {k, dir}
+var strView={leadership:'table', industries:'table'};
+var STR_COLS=[
+  {k:'t', label:'ETF / MARKET', left:1},
+  {k:'rs', label:'RS 1M %'},
+  {k:'thrust', label:'RS Thrust %'},
+  {k:'p1m', label:'1M PRICE', spark:'m1', opt:1},
+  {k:'rsline', label:'1M RS', spark:'rs', opt:1},
+  {k:'atr', label:'50D ATR index'},
+  {k:'rsbar', label:'RS vs RSP'},
+  {k:'intra', label:'Intraday', spark:'intra', opt:1},
+  {k:'d1', label:'1D'},
+  {k:'m1', label:'1M'},
+  {k:'off', label:'Off 52W H', opt:1}
+];
+function rsBar(v){
+  var w=Math.min(48, Math.abs(v)*3.2), left = v>=0 ? 50 : 50-w/96*100;
+  var col = v>=0 ? 'rgb(117,117,117)' : 'rgb(0,0,0)';
+  return '<span style="display:inline-block;position:relative;width:96px;height:8px;background:#9e9e9e;border-radius:99px;vertical-align:middle"><span style="position:absolute;top:0;height:100%;left:'+(v>=0?50:left)+'%;width:'+(w/96*100)+'%;background:'+col+';border-radius:99px"></span><span style="position:absolute;left:50%;top:-2px;width:1px;height:12px;background:#3d3d3d"></span></span>';
+}
+function strengthTableHTML(secId, rows){
+  var st=strSort[secId] || {k:'rs', dir:-1};
+  var sorted=rows.slice();
+  if(st.k && st.k!=='rsbar'){
+    sorted.sort(function(a,b){ var x=a[st.k], y=b[st.k]; if(typeof x==='string'){ x=x.toLowerCase(); y=String(y).toLowerCase(); } return (x<y?-1:x>y?1:0)*st.dir; });
+  }
+  var head=STR_COLS.map(function(c){
+    var arr = (st.k===c.k) ? '<span class="arr">'+(st.dir<0?'▼':'▲')+'</span>' : '';
+    return '<th data-sk="'+c.k+'"'+(c.opt?' class="opt"':'')+(c.left?' style="text-align:left"':'')+'>'+c.label+arr+'</th>';
+  }).join('');
+  var body=sorted.map(function(r){
+    var cells=STR_COLS.map(function(c){
+      var v;
+      if(c.spark) v=spark2(r.t+curDate()+c.k, r[c.spark], 'mini', 86, 26);
+      else if(c.k==='t') v='<span style="font-weight:700">'+r.t+'</span> <span style="color:var(--muted);font-weight:400">'+esc(r.name)+'</span>';
+      else if(c.k==='rs') v='<span class="pill '+(r.rs>=0?'g':'r')+'">'+fmt(r.rs)+'</span>';
+      else if(c.k==='rsbar') v=rsBar(r.rs);
+      else if(c.k==='thrust') v='<b class="'+(r.thrust>=50?'pos':'neg')+'">'+r.thrust+'%</b>';
+      else if(c.k==='atr') v=r.atr.toFixed(2);
+      else if(c.k==='d1') v='<b class="'+cls(r.d1)+'">'+fmt(r.d1)+'</b>';
+      else if(c.k==='m1') v='<b class="'+cls(r.m1)+'">'+fmt(r.m1)+'</b>';
+      else if(c.k==='off') v='<span class="neg">'+r.off+'%</span>';
+      else v=r[c.k];
+      return '<td'+(c.opt?' class="opt"':'')+(c.left?' style="text-align:left"':'')+'>'+v+'</td>';
+    }).join('');
+    return '<tr>'+cells+'</tr>';
+  }).join('');
+  return '<div class="tscroll"><table class="data" data-sec="'+secId+'"><thead><tr>'+head+'</tr></thead><tbody>'+body+'</tbody></table></div>';
+}
+function strengthChartsHTML(rows){
+  return '<div class="chart-grid">'+rows.map(function(r){
+    return '<article class="chart-card"><div class="ct"><span><b>'+r.t+'</b> <span class="muted" style="font-size:11.5px">'+esc(r.name)+'</span></span><b class="'+cls(r.rs)+'">'+fmt(r.rs)+'</b></div>'
+      + spark2(r.t+curDate()+'big', r.rs, 'mini-lg', 150, 44)
+      + '<div class="kv"><span>1D</span><b class="'+cls(r.d1)+'">'+fmt(r.d1)+'</b></div><div class="kv"><span>Thrust</span><b>'+r.thrust+'%</b></div></article>';
+  }).join('')+'</div>';
+}
+function bindStrengthTables(el, rerender){
+  var ths=el.querySelectorAll('th[data-sk]');
+  for(var i=0;i<ths.length;i++) ths[i].addEventListener('click', function(){
+    var sec=this.closest('table').getAttribute('data-sec'), k=this.getAttribute('data-sk');
+    if(k==='rsbar') return;
+    var st=strSort[sec] || {k:'rs', dir:-1};
+    if(st.k===k) st.dir*=-1; else st={k:k, dir:(k==='t'?1:-1)};
+    strSort[sec]=st; rerender();
+  });
+}
+function segToggleHTML(pageKey){
+  var v=strView[pageKey];
+  return '<span class="seg" role="group" aria-label="View mode"><button data-view="table" class="'+(v==='table'?'active':'')+'">Table</button><button data-view="charts" class="'+(v==='charts'?'active':'')+'">Charts</button></span>';
+}
+function bindSeg(el, pageKey, rerender){
+  var bs=el.querySelectorAll('[data-view]');
+  for(var i=0;i<bs.length;i++) bs[i].addEventListener('click', function(){ strView[pageKey]=this.getAttribute('data-view'); rerender(); });
+}
+function renderLeadership(){
+  var el=document.getElementById('page-leadership'); if(!el) return;
+  var date=curDate(), view=strView.leadership;
+  var hs=hSess(), htape={};
+  if(hs && hs.tape) hs.tape.forEach(function(x){ htape[x.t]=x; });
+  var idxCards=INDEX_ROWS.map(function(base){
+    var r=scaledRow(base);
+    var d1 = (date==='2026-11-19' && (base.t in TAPE19)) ? TAPE19[base.t] : r.d1;
+    var px = INDEX_PX[base.t];
+    if(htape[base.t]){ d1=htape[base.t].d; if(htape[base.t].close!=null) px=htape[base.t].close; }
+    return '<article class="idx-card"><div class="tape-top"><span class="ticker">'+base.t+'</span>'+(base.t==='RSP'?'<span class="bench-tag">Benchmark</span>':'<span class="day-pct '+cls(d1)+'">'+fmt(d1)+'</span>')+'</div>'
+      +'<div class="px" style="margin-top:4px">'+px.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+(base.t==='RSP'?' <span class="day-pct '+cls(d1)+'" style="font-size:13px">'+fmt(d1)+'</span>':'')+'</div>'
+      + sparkPath(base.t, d1, date)
+      +'<div class="tape-times"><span>09:30</span><span>16:00 ET</span></div>'
+      +'<div class="meta"><span>1M / RSP</span><b class="'+cls(r.rs)+'">'+(r.rs===0?'0%':fmt(r.rs))+'</b></div>'
+      +'<div class="meta"><span>50D ATR index</span><b>'+r.atr.toFixed(2)+'</b></div></article>';
+  }).join('');
+  function section(id, title, sub, rows, histRows){
+    var scaled = histRows ? histRows.map(histStrengthRow) : rows.map(scaledRow);
+    return '<div class="sec-head"><h3>'+title+' <span class="sub">'+sub+'</span></h3></div><section class="panel">'
+      + (view==='table' ? strengthTableHTML(id, scaled) : strengthChartsHTML(scaled)) + '</section>';
+  }
+  el.innerHTML=
+    '<h2 class="page-title">Market Strength</h2><p class="page-sub">Relative strength vs RSP · ETF close '+date+' · 1M = trailing 21 sessions</p>'
+    +'<div class="sec-head" style="margin-top:14px"><h3>Indexes <span class="sub">Price · 1D · 50D ATR index · 1M vs RSP</span></h3>'+segToggleHTML('leadership')+'</div>'
+    +'<section class="idx-grid">'+idxCards+'</section>'
+    + section('seg','Market segments','9 groups',SEGMENT_ROWS, hs&&hs.segments)
+    + section('ews','Equal-weight sectors','11 sectors · equal weight vs RSP',EW_SECTOR_ROWS, hs&&hs.ew)
+    + section('spd','SPDR sectors','11 sectors · cap weight',SPDR_ROWS, hs&&hs.spdr)
+    +'<p class="foot-note">Click any column header to sort. RS = relative strength vs RSP over the trailing 21 sessions; thrust measures recent acceleration. Prices via Stooq / Yahoo Finance; charts reference TradingView. Data loads from data/history.json when available; otherwise the embedded snapshot is shown.</p>';
+  bindSeg(el,'leadership',renderLeadership);
+  bindStrengthTables(el,renderLeadership);
+}
+function renderIndustries(){
+  var el=document.getElementById('page-industries'); if(!el) return;
+  var date=curDate(), view=strView.industries;
+  var hs=hSess();
+  var scaled = (hs && hs.industries) ? hs.industries.map(histStrengthRow) : IND_ROWS.map(scaledRow);
+  var sorted=scaled.slice().sort(function(a,b){ return b.rs-a.rs; });
+  var top=sorted[0], bot=sorted[sorted.length-1];
+  el.innerHTML=
+    '<h2 class="page-title">Industry Group Strength</h2><p class="page-sub">'+scaled.length+' industry &amp; thematic ETFs ranked by 1M relative strength vs RSP · close '+date+'</p>'
+    +'<div class="toolbar"><span class="count-note" style="margin:0">Strongest <b>'+top.t+' · '+esc(top.name)+' <span class="pos">'+fmt(top.rs)+'</span></b> &nbsp;·&nbsp; Weakest <b>'+bot.t+' · '+esc(bot.name)+' <span class="neg">'+fmt(bot.rs)+'</span></b></span><span style="margin-left:auto">'+segToggleHTML('industries')+'</span></div>'
+    +'<section class="panel" style="margin-top:10px">'+(view==='table' ? strengthTableHTML('ind', scaled) : strengthChartsHTML(scaled))+'</section>'
+    +'<p class="foot-note">Click any column header to sort. RS = relative strength vs RSP over the trailing 21 sessions. Prices via Stooq / Yahoo Finance; charts reference TradingView. Data loads from data/history.json when available; otherwise the embedded snapshot is shown.</p>';
+  bindSeg(el,'industries',renderIndustries);
+  bindStrengthTables(el,renderIndustries);
+}
+
+// ================= Positioning =================
+var POS_WINDOW='5Y';
+var POS_DATA=[
+  {etf:'IWM', name:'Russell 2000', px:238.60, lg:71.3, cm:29.4, sm:43.4, net:-48210, wk:-6.8},
+  {etf:'SPY', name:'S&P 500', px:691.44, lg:58.2, cm:41.0, sm:52.3, net:61480, wk:2.4},
+  {etf:'QQQ', name:'Nasdaq 100', px:618.30, lg:63.5, cm:36.8, sm:55.1, net:42750, wk:1.8},
+  {etf:'IBIT', name:'Bitcoin', px:52.40, lg:47.9, cm:52.4, sm:61.0, net:18930, wk:0.9},
+  {etf:'ETHA', name:'Ether', px:28.75, lg:38.5, cm:65.7, sm:23.6, net:-9410, wk:-3.14},
+  {etf:'GLD', name:'Gold', px:368.20, lg:78.4, cm:22.6, sm:66.2, net:88360, wk:3.6},
+  {etf:'CPER', name:'Copper', px:31.45, lg:55.0, cm:48.3, sm:39.7, net:12680, wk:1.1},
+  {etf:'SLV', name:'Silver', px:46.80, lg:69.8, cm:30.5, sm:58.9, net:34090, wk:2.9},
+  {etf:'USO', name:'WTI crude oil', px:74.30, lg:6.7, cm:92.5, sm:41.2, net:-96380, wk:-2.57},
+  {etf:'UNG', name:'Natural gas', px:11.85, lg:3.2, cm:100, sm:4.7, net:-182450, wk:-4.2}
+];
+var POS19={UNG:[4.1,98.6,5.9], USO:[9.2,90.1,39.8], IWM:[74.8,31.2,44.9], ETHA:[41.6,63.1,25.1]}; // [large, commercials, small]
+function posStatus(lg){
+  if(lg<=5) return ['Crowded Short','short'];
+  if(lg>=95) return ['Crowded Long',''];
+  if(lg<=15) return ['Short crowded','short'];
+  if(lg>=85) return ['Long crowded',''];
+  if(lg<=25) return ['Short leaning','short'];
+  if(lg>=75) return ['Long leaning',''];
+  return ['Neutral range',''];
+}
+function renderPositioning(){
+  var el=document.getElementById('page-positioning'); if(!el) return;
+  var date=curDate(), wf = POS_WINDOW==='5Y'?1 : POS_WINDOW==='3Y'?0.92 : 0.8;
+  var hs=hSess(), hpos=(hs&&hs.positioning)?hs.positioning:null, report=(hs&&hs.posReport)||'2026-11-17';
+  function adj(p){ return +(50+(p-50)*wf).toFixed(1); }
+  var cards=(hpos||POS_DATA).map(function(p){
+    var lg=p.lg, cm=p.cm, sm=p.sm;
+    if(!hpos){
+      if(date==='2026-11-19' && POS19[p.etf]){ lg=POS19[p.etf][0]; cm=POS19[p.etf][1]; sm=POS19[p.etf][2]; }
+      else if(date!=='2026-11-20'){ var sh=(5-DATES.indexOf(date))*1.4; lg=+(50+(lg-50)*(1-sh/40)).toFixed(1); cm=+(50+(cm-50)*(1-sh/40)).toFixed(1); sm=+(50+(sm-50)*(1-sh/40)).toFixed(1); }
+    }
+    lg=adj(lg); cm=adj(cm); sm=adj(sm);
+    var st=posStatus(lg);
+    function row(label, val, col){ return '<div class="cot-row"><span>'+label+'</span><span class="cot-track"><span class="cot-marker" style="left:'+Math.max(1,Math.min(99,val))+'%;background:'+col+'"></span></span><span class="cot-val" style="color:'+col+'">'+val+'</span></div>'; }
+    var net=p.net, rangeLo=p.range5y?p.range5y[0]:-Math.abs(net)*1.9, rangeHi=p.range5y?p.range5y[1]:Math.abs(net)*1.9, rangeMax=Math.max(Math.abs(rangeLo),Math.abs(rangeHi))||1, rangePos=Math.max(2,Math.min(98, 50 + net/rangeMax*50));
+    return '<article class="pos2-card"><div class="prow"><span><span class="sym">'+p.etf+'</span> <span class="pname">'+p.name+'</span></span><span class="pprice">'+p.px.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+'</span></div>'
+      +'<div style="margin-top:6px"><span class="status-tag '+st[1]+'">'+st[0]+'</span> <span class="muted" style="font-size:11.5px">'+POS_WINDOW+' percentile · large specs</span></div>'
+      +'<div style="margin-top:8px">'+row('Large specs', lg, '#0f7d94')+row('Small specs', sm, '#9a6206')+row('Commercials', cm, '#b02ec4')+'</div>'
+      +'<div class="kv"><span>COT report</span><b>'+report+'</b></div>'
+      +'<div class="kv"><span>Net position (large specs)</span><b class="'+(net>=0?'pos':'neg')+'">'+(net>=0?'+':'−')+Math.abs(net).toLocaleString()+' · '+(net>=0?'net long':'net short')+'</b></div>'
+      +'<div class="kv"><span>Weekly change</span><b class="'+cls(p.wk)+'">'+(p.wk>0?'+':'')+p.wk+' pts</b></div>'
+      +'<div class="kv"><span>5Y range of net position</span><b>'+(rangeLo<0?'−':'+')+Math.abs(Math.round(rangeLo)).toLocaleString()+' … '+(rangeHi<0?'−':'+')+Math.abs(Math.round(rangeHi)).toLocaleString()+'</b></div>'
+      +'<div class="cot-track" style="margin-top:6px"><span class="cot-marker" style="left:'+rangePos+'%;background:#141414"></span></div>'
+      +'<div style="margin-top:8px">'+spark2('pos'+p.etf, net/9000, 'mini-lg', 150, 44)+'<div class="muted" style="font-size:11px;margin-top:2px">Weekly net position · trailing 52 reports</div></div>'
+      +'</article>';
+  }).join('');
+  el.innerHTML=
+    '<h2 class="page-title">Positioning</h2><p class="page-sub">Natural gas · Crowded Short — the one confirmed crowding extreme of 10 markets · COT report '+report+' · close '+date+'</p>'
+    +'<div class="toolbar"><span class="seg" role="group" aria-label="Percentile window"><button data-pw="1Y" class="'+(POS_WINDOW==='1Y'?'active':'')+'">1Y</button><button data-pw="3Y" class="'+(POS_WINDOW==='3Y'?'active':'')+'">3Y</button><button data-pw="5Y" class="'+(POS_WINDOW==='5Y'?'active':'')+'">5Y</button></span><span class="count-note" style="margin:0">Percentiles rank each group\'s net position within the selected window</span></div>'
+    +'<section class="pos2-grid">'+cards+'</section>'
+    +'<div class="legend"><span><i style="background:#0f7d94"></i>Large specs</span><span><i style="background:#9a6206"></i>Small specs</span><span><i style="background:#b02ec4"></i>Commercials</span></div>'
+    +'<p class="foot-note">Commitment of Traders data via CFTC (report Tuesday 2026-11-17, released Friday). ETF prices via Stooq / Yahoo Finance. Daily price changes show response, not measured fund flows. Data loads from data/history.json when available; otherwise the embedded snapshot is shown.</p>';
+  var bs=el.querySelectorAll('[data-pw]');
+  for(var i=0;i<bs.length;i++) bs[i].addEventListener('click', function(){ POS_WINDOW=this.getAttribute('data-pw'); renderPositioning(); });
+}
+
+// ================= Liquid Leadership =================
+var LIQ_PERIOD='1M';
+var LIQ_FACTORS={'1D':0.04,'1W':0.22,'1M':1,'3M':2.3,'6M':3.9,'YTD':5.2,'1Y':6.8,'3Y':11,'5Y':16,'10Y':24,'All time':30};
+var LIQ_BAND='all';
+var LIQ_VIEW='table';
+var LEADERS=[
+  ['SNDK','Storage & memory',58.4,11.8,286,12.4,4.2],['WDC','Storage & memory',44.7,8.3,198,7.6,3.9],['HOOD','Financial platforms',42.6,6.2,412,38.5,3.1],
+  ['MU','Semiconductors',38.9,4.6,524,9.8,3.6],['STX','Storage & memory',36.2,3.9,176,5.1,3.4],['APP','Mobile software',33.8,2.7,342,6.9,2.8],
+  ['LITE','Optical components',31.5,7.1,132,3.6,4.6],['PLTR','Data software',29.4,9.6,468,21.3,3.3],['CIEN','Optical networking',27.1,5.4,88,4.2,3.0],
+  ['CRDO','Connectivity',26.3,6.8,96,3.1,4.1],['COHR','Optical components',24.8,4.1,154,4.9,3.8],['VRT','Power & cooling',22.6,3.2,208,5.8,2.9],
+  ['ALAB','Semiconductors',21.4,5.9,118,2.8,4.4],['ANET','Networking',19.8,1.8,264,7.4,2.4],['COIN','Crypto platforms',18.7,2.3,236,11.6,4.9],
+  ['ARM','Semiconductors',17.2,1.2,188,6.2,3.7]
+];
+var LIQ_GROUPS=[
+  ['Storage & memory',46,3,46.4],['Semiconductors',88,3,26.5],['Optical components',34,2,28.2],['Data software',62,1,29.4],
+  ['Financial platforms',41,1,42.6],['Mobile software',55,1,33.8],['Optical networking',18,1,27.1],['Connectivity',15,1,26.3],
+  ['Power & cooling',26,1,22.6],['Networking',29,1,19.8],['Crypto platforms',22,1,18.7],['Gold miners',74,0,6.1]
+];
+var LIQ_BANDS=[['all','All leaders',null,null],['b1','≤ 2%',-99,2],['b2','2–5%',2,5],['b3','5–10%',5,10],['b4','> 10%',10,999]];
+function renderLiquid(){
+  var el=document.getElementById('page-liquid'); if(!el) return;
+  var date=curDate(), f=LIQ_FACTORS[LIQ_PERIOD]||1, sc=dScale();
+  var hs=hSess(), hliq=(hs&&hs.liquid)?hs.liquid:null;
+  var LEAD=hliq?hliq.leaders:LEADERS, GRP=hliq?hliq.groups:LIQ_GROUPS, lsc=hliq?1:sc;
+  var periods=Object.keys(LIQ_FACTORS).map(function(p){ return '<button class="tbtn'+(p===LIQ_PERIOD?' active':'')+'" data-lp="'+p+'">'+p+'</button>'; }).join('');
+  function bandCount(b){ if(b[0]==='all') return LEAD.length; return LEAD.filter(function(L){ return L[3]>b[2] && L[3]<=b[3]; }).length; }
+  var bands=LIQ_BANDS.map(function(b){ return '<button class="band'+(LIQ_BAND===b[0]?' active':'')+'" data-band="'+b[0]+'">Extension · 50D SMA '+b[1]+' &nbsp;<b>'+bandCount(b)+'</b></button>'; }).join('');
+  var groups=GRP.map(function(g){
+    var avg=+(g[3]*f*lsc).toFixed(1);
+    return '<tr><td class="name">'+g[0]+'</td><td>'+g[1]+'</td><td style="font-weight:700">'+g[2]+'</td><td class="'+cls(avg)+'" style="font-weight:700">'+fmt(avg)+'</td><td>'+spark2('grp'+g[0]+date, avg, 'mini', 86, 26)+'</td></tr>';
+  }).join('');
+  var shown=LEAD.filter(function(L){ if(LIQ_BAND==='all') return true; var b=LIQ_BANDS.filter(function(x){return x[0]===LIQ_BAND;})[0]; return L[3]>b[2] && L[3]<=b[3]; });
+  var rowsHtml=shown.slice().sort(function(a,b){ return b[2]-a[2]; }).map(function(L){
+    var ret=+(L[2]*f*lsc).toFixed(1);
+    return '<tr><td class="name" style="font-weight:700">'+L[0]+'</td><td style="text-align:left;color:var(--muted)">'+L[1]+'</td><td class="pos" style="font-weight:700">'+fmt(ret)+'</td><td style="font-weight:700">'+L[3]+'%</td><td>$'+L[4]+'M</td><td>'+L[5]+'M</td><td>'+L[6]+'%</td></tr>';
+  }).join('');
+  var chartsHtml='<div class="chart-grid">'+shown.map(function(L){
+    var ret=+(L[2]*f*lsc).toFixed(1);
+    return '<article class="chart-card"><div class="ct"><span><b>'+L[0]+'</b> <span class="muted" style="font-size:11.5px">'+L[1]+'</span></span><b class="pos">'+fmt(ret)+'</b></div>'+spark2('lead'+L[0]+date, ret, 'mini-lg', 150, 44)+'<div class="kv"><span>Extension</span><b>'+L[3]+'%</b></div><div class="kv"><span>ADR</span><b>'+L[6]+'%</b></div></article>';
+  }).join('')+'</div>';
+  el.innerHTML=
+    '<h2 class="page-title">Liquid Leadership</h2><p class="page-sub">Liquid leaders ranked by relative strength vs RSP · close '+date+' · extension measured vs the 50D SMA</p>'
+    +'<div class="toolbar" role="group" aria-label="Leadership period">'+periods+'<span style="margin-left:auto" class="seg" role="group" aria-label="View mode"><button data-lv="table" class="'+(LIQ_VIEW==='table'?'active':'')+'">Table</button><button data-lv="charts" class="'+(LIQ_VIEW==='charts'?'active':'')+'">Charts</button></span></div>'
+    +'<div class="band-row" role="group" aria-label="Extension bands">'+bands+'</div>'
+    +'<div class="sec-head"><h3>Group leadership <span class="sub">'+GRP.length+' groups · RS vs RSP · '+LIQ_PERIOD+'</span></h3></div>'
+    +'<section class="panel"><div class="tscroll"><table class="data" aria-label="Group leadership"><thead><tr><th style="text-align:left">Group</th><th>Stocks</th><th>Leaders</th><th>Avg '+LIQ_PERIOD+' return %</th><th>RS vs RSP</th></tr></thead><tbody>'+groups+'</tbody></table></div></section>'
+    +'<div class="sec-head"><h3>Leaders <span class="sub">'+shown.length+' shown of '+LEAD.length+' leaders · 786 stocks scanned · '+LIQ_PERIOD+' data</span></h3><button class="tbtn" id="liqExport">Export symbols</button></div>'
+    +(LIQ_VIEW==='table'
+      ? '<section class="panel"><div class="tscroll"><table class="data" aria-label="Liquid leaders"><thead><tr><th style="text-align:left">Stock</th><th style="text-align:left">Industry</th><th>'+LIQ_PERIOD+' return %</th><th>Extension</th><th>Avg $ vol</th><th>Avg shares</th><th>ADR%</th></tr></thead><tbody>'+rowsHtml+'</tbody></table></div></section>'
+      : chartsHtml)
+    +'<p class="foot-note">Extension = distance above the 50D SMA. Click an extension band to filter the leaders list. Prices via Stooq / Yahoo Finance; charts reference TradingView. Data loads from data/history.json when available; otherwise the embedded snapshot is shown.</p>';
+  var bs=el.querySelectorAll('[data-lp]'); for(var i=0;i<bs.length;i++) bs[i].addEventListener('click', function(){ LIQ_PERIOD=this.getAttribute('data-lp'); renderLiquid(); });
+  bs=el.querySelectorAll('[data-band]'); for(i=0;i<bs.length;i++) bs[i].addEventListener('click', function(){ LIQ_BAND=this.getAttribute('data-band'); renderLiquid(); });
+  bs=el.querySelectorAll('[data-lv]'); for(i=0;i<bs.length;i++) bs[i].addEventListener('click', function(){ LIQ_VIEW=this.getAttribute('data-lv'); renderLiquid(); });
+  var ex=el.querySelector('#liqExport'); if(ex) ex.addEventListener('click', function(){ downloadSymbols('kks-leaders-'+curDate()+'.txt', shown.map(function(L){return L[0];}).join(', ')); });
+}
+
+// ================= data/history.json live data layer =================
+// On load the page fetches data/history.json (same folder as this page) and merges every
+// session it finds over the embedded snapshot above. Any section a session omits keeps the
+// embedded values for that date, so a tape-only session updates just the tape and no panel
+// ever renders blank. If the fetch fails, the embedded snapshot is used exactly as before.
+// The session shape is documented in the comment at the top of this file.
+var HIST={}; // date -> normalized session from data/history.json
+function hSess(){ return HIST[curDate()] || null; }
+function hNum(v, dflt){ var n=(typeof v==='string')?parseFloat(v.replace(/,/g,'')):v; return (typeof n==='number' && isFinite(n)) ? n : (dflt===undefined?0:dflt); }
+function hPair(v){ if(!v) return null; if(Array.isArray(v)) return [hNum(v[0]), hNum(v[1])]; return [hNum(v.up!=null?v.up:v.u), hNum(v.down!=null?v.down:v.d)]; }
+function hStrengthRow(r){
+  if(Array.isArray(r)) return {t:r[0], name:r[1]||'', rs:hNum(r[2]), thrust:Math.round(hNum(r[3],80)), atr:hNum(r[4],1), intra:hNum(r[5]), d1:hNum(r[6]), m1:(r[7]==null?null:hNum(r[7])), off:hNum(r[8],-5)};
+  return {t:r.t||r.ticker||r.symbol||'', name:r.name||'', rs:hNum(r.rs!=null?r.rs:(r.rs1m!=null?r.rs1m:r.m)), thrust:Math.round(hNum(r.thrust,80)), atr:hNum(r.atr,1), intra:hNum(r.intra!=null?r.intra:r.intraday), d1:hNum(r.d1!=null?r.d1:r.d), m1:(r.m1==null?null:hNum(r.m1)), off:hNum(r.off,-5)};
+}
+function histStrengthRow(r){ var o={}; for(var k in r) o[k]=r[k]; if(o.m1==null) o.m1=+(o.rs + RSP_M1).toFixed(1); return o; }
+function hTapeRow(x){
+  if(Array.isArray(x)) return {t:x[0], close:(x[1]==null?null:hNum(x[1])), d:hNum(x[2]), m:hNum(x[3]), atr:(x[4]==null?null:hNum(x[4]))};
+  return {t:x.t||x.ticker||x.symbol||'', close:(x.close!=null?hNum(x.close):(x.price!=null?hNum(x.price):(x.px!=null?hNum(x.px):null))), d:hNum(x.d!=null?x.d:(x.d1!=null?x.d1:x.pct)), m:hNum(x.m!=null?x.m:(x.m1!=null?x.m1:x.rs)), atr:(x.atr==null?null:hNum(x.atr))};
+}
+function normalizeSession(s){
+  if(!s || typeof s!=='object') return null;
+  var ns={};
+  if(Array.isArray(s.tape) && s.tape.length) ns.tape=s.tape.map(hTapeRow).filter(function(x){ return x.t; });
+  var b=s.breadth;
+  if(b && typeof b==='object'){
+    ns.breadth={ daily:hPair(b.daily||b.daily4), r5:(b.r5!=null?hNum(b.r5):(b.ratio5!=null?hNum(b.ratio5):null)), r10:(b.r10!=null?hNum(b.r10):(b.ratio10!=null?hNum(b.ratio10):null)),
+      quarter:hPair(b.quarter||b.q25), month25:hPair(b.month25||b.m25), month50:hPair(b.month50||b.m50), d34:hPair(b.d34||b.s34||b.days34),
+      above:(b.above==null?null:hNum(b.above)), aboveD:(b.aboveD!=null?String(b.aboveD):null),
+      spx:(b.spx==null?null:b.spx), spxPct:(b.spxPct!=null?hNum(b.spxPct):(b.pct!=null?hNum(b.pct):(b.d1!=null?hNum(b.d1):null))) };
+  }
+  var sec=s.sectors||{};
+  var seg=sec.segments||sec.marketSegments||s.segments, ew=sec.ew||sec.equalWeight||sec.equal_weight||s.ew, spd=sec.spdr||s.spdr;
+  if(Array.isArray(seg)&&seg.length) ns.segments=seg.map(hStrengthRow);
+  if(Array.isArray(ew)&&ew.length) ns.ew=ew.map(hStrengthRow);
+  if(Array.isArray(spd)&&spd.length) ns.spdr=spd.map(hStrengthRow);
+  if(Array.isArray(s.industries)&&s.industries.length) ns.industries=s.industries.map(hStrengthRow);
+  var pos=s.positioning, markets=Array.isArray(pos)?pos:(pos&&pos.markets);
+  if(Array.isArray(markets)&&markets.length){
+    ns.posReport=(pos&&pos.report)||s.cotReport||null;
+    ns.positioning=markets.map(function(p){
+      if(Array.isArray(p)) return {etf:p[0], name:p[1]||'', px:hNum(p[2]), lg:hNum(p[3],50), cm:hNum(p[5],50), sm:hNum(p[4],50), net:hNum(p[6]), wk:hNum(p[7]), range5y:null};
+      var rg=p.range5y||p.range;
+      return {etf:p.etf||p.t||p.symbol||'', name:p.name||'', px:hNum(p.px!=null?p.px:(p.price!=null?p.price:p.close)),
+        lg:hNum(p.lg!=null?p.lg:(p.large!=null?p.large:p.largeSpecs),50), cm:hNum(p.cm!=null?p.cm:(p.commercials!=null?p.commercials:p.com),50), sm:hNum(p.sm!=null?p.sm:(p.small!=null?p.small:p.smallSpecs),50),
+        net:hNum(p.net), wk:hNum(p.wk!=null?p.wk:(p.weeklyChange!=null?p.weeklyChange:p.chg)), range5y:(Array.isArray(rg)?[hNum(rg[0]),hNum(rg[1])]:null)};
+    }).filter(function(p){ return p.etf; });
+    if(!ns.positioning.length) delete ns.positioning;
+  }
+  var lq=s.liquid;
+  if(lq && typeof lq==='object' && (Array.isArray(lq.leaders)||Array.isArray(lq.groups))){
+    var L={period:lq.period||'1M', groups:[], leaders:[]};
+    if(Array.isArray(lq.groups)) L.groups=lq.groups.map(function(g){
+      if(Array.isArray(g)) return [g[0], hNum(g[1]), hNum(g[2]), hNum(g[3])];
+      return [g.name||g.group||'', hNum(g.stocks!=null?g.stocks:g.count), hNum(g.leaders!=null?g.leaders:g.n), hNum(g.avg!=null?g.avg:g.avgRet)];
+    }).filter(function(g){ return g[0]; });
+    if(Array.isArray(lq.leaders)) L.leaders=lq.leaders.map(function(x){
+      if(Array.isArray(x)) return [x[0], x[1]||'', hNum(x[2]), hNum(x[3]), hNum(x[4]), hNum(x[5]), hNum(x[6])];
+      return [x.t||x.ticker||x.symbol||'', x.group||x.industry||x.theme||'', hNum(x.ret!=null?x.ret:(x.r1m!=null?x.r1m:x.m1)), hNum(x.ext!=null?x.ext:x.extension), hNum(x.vol!=null?x.vol:(x.dvol!=null?x.dvol:x.avgVol)), hNum(x.shares!=null?x.shares:x.avgShares), hNum(x.adr)];
+    }).filter(function(x){ return x[0]; });
+    if(L.groups.length||L.leaders.length) ns.liquid=L;
+  }
+  return Object.keys(ns).length ? ns : null;
+}
+var EW_OF_SPDR={XLP:'RSPS', XLRE:'RSPR', XLU:'RSPU', XLY:'RSPD', XLV:'RSPH', XLI:'RSPI', XLF:'RSPF', XLB:'RSPM', XLE:'RSPE', XLC:'RSPC', XLK:'RSPT'};
+function applyToSnap(date, ns){
+  var base=SNAP[date];
+  if(!base){
+    var src=null, i;
+    for(i=0;i<DATES.length;i++){ if(SNAP[DATES[i]] && DATES[i]<=date) src=DATES[i]; }
+    if(!src) src=DATES[DATES.length-1];
+    base=JSON.parse(JSON.stringify(SNAP[src]));
+    SNAP[date]=base;
+  }
+  if(ns.tape){
+    var old={}; base.tape.forEach(function(x){ old[x.t]=x; });
+    base.tape=ns.tape.map(function(x){ return {t:x.t, d:x.d, m:x.m, atr:(x.atr!=null?x.atr:(old[x.t]?old[x.t].atr:0))}; });
+    var spy=ns.tape.filter(function(x){ return x.t==='SPY'; })[0];
+    if(spy && !ns.breadth) base.spxPct=spy.d;
+  }
+  if(ns.breadth){
+    var b=ns.breadth, rows=[];
+    if(b.daily) rows.push(['Daily ±4%', b.daily[0], b.daily[1]]);
+    if(b.quarter) rows.push(['Quarter ±25%', b.quarter[0], b.quarter[1]]);
+    if(b.d34) rows.push(['34 sessions ±13%', b.d34[0], b.d34[1]]);
+    if(b.month25) rows.push(['Month ±25%', b.month25[0], b.month25[1]]);
+    if(b.month50) rows.push(['Month ±50%', b.month50[0], b.month50[1]]);
+    if(rows.length) base.breadth=rows;
+    if(b.r5!=null) base.p5=b.r5.toFixed(2)+'×';
+    if(b.r10!=null) base.p10=b.r10.toFixed(2)+'×';
+    if(b.above!=null) base.above=b.above;
+    if(b.aboveD) base.aboveD=b.aboveD;
+    if(b.spx!=null) base.spx=(typeof b.spx==='number') ? b.spx.toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:1}) : String(b.spx);
+    if(b.spxPct!=null) base.spxPct=b.spxPct;
+  }
+  if(ns.spdr){
+    var ewByT={}; if(ns.ew) ns.ew.forEach(function(r){ ewByT[r.t]=r; });
+    var sorted=ns.spdr.slice().sort(function(a,b2){ return b2.rs-a.rs; });
+    var pick=sorted.slice(0,4).concat(sorted.slice(-2));
+    base.sectors=pick.map(function(r){ var e=ewByT[EW_OF_SPDR[r.t]]; return [r.name, r.d1, r.rs, e?e.rs:r.rs]; });
+  }
+  if(ns.industries){
+    var top5=ns.industries.slice().sort(function(a,b2){ return b2.rs-a.rs; }).slice(0,5);
+    base.industries=top5.map(function(r){ return [r.t, r.name, r.d1, r.rs, r.thrust]; });
+    var byD1=ns.industries.slice().sort(function(a,b2){ return b2.d1-a.d1; });
+    if(byD1.length){ base.strong=[byD1[0].t+' · '+byD1[0].name, byD1[0].d1]; base.weak=[byD1[byD1.length-1].t+' · '+byD1[byD1.length-1].name, byD1[byD1.length-1].d1]; }
+  }
+  if(ns.positioning){
+    base.positioning=ns.positioning.slice(0,4).map(function(p){
+      var st=posStatus(p.lg);
+      return {name:p.name||p.etf, etf:p.etf, crowd:(st[0]==='Crowded Short'||st[0]==='Crowded Long')?st[0]:'', note:'Large specs '+(p.wk>0?'+':'')+p.wk+' pts this week',
+        rows:[['Large specs',p.lg,'#0f7d94'],['Commercials',p.cm,'#b02ec4'],['Small specs',p.sm,'#9a6206']]};
+    });
+  }
+}
+function mergeBreadthHist(date, ns){
+  if(!ns.breadth) return;
+  var b=ns.breadth, prev=bhRow(date), row=null, i;
+  for(i=0;i<BHIST.length;i++){ if(BHIST[i].date===date){ row=BHIST[i]; break; } }
+  if(!row){ row={date:date, du:prev.du, dd:prev.dd, q:prev.q.slice(), s:prev.s.slice(), m25:prev.m25.slice(), m50:prev.m50.slice(), r5:prev.r5, r10:prev.r10, above:prev.above, spx:prev.spx, pct:prev.pct}; BHIST.push(row); BHIST.sort(function(a,b2){ return a.date<b2.date?-1:1; }); }
+  if(b.daily){ row.du=b.daily[0]; row.dd=b.daily[1]; }
+  if(b.quarter) row.q=b.quarter;
+  if(b.d34) row.s=b.d34;
+  if(b.month25) row.m25=b.month25;
+  if(b.month50) row.m50=b.month50;
+  if(b.r5!=null) row.r5=b.r5;
+  if(b.r10!=null) row.r10=b.r10;
+  if(b.above!=null) row.above=b.above;
+  if(b.spx!=null) row.spx=hNum(b.spx, row.spx);
+  if(b.spxPct!=null) row.pct=b.spxPct;
+}
+function applyHistory(json){
+  var sessions=null;
+  if(!json || typeof json!=='object') return;
+  if(Array.isArray(json)){ sessions={}; json.forEach(function(s){ if(s && s.date) sessions[s.date]=s; }); }
+  else if(json.sessions && typeof json.sessions==='object') sessions=json.sessions;
+  else sessions=json;
+  var dates=Object.keys(sessions).filter(function(d){ return /^\d{4}-\d{2}-\d{2}$/.test(d); }).sort();
+  if(!dates.length) return;
+  var changed=false;
+  dates.forEach(function(date){
+    var ns=normalizeSession(sessions[date]);
+    if(!ns) return;
+    HIST[date]=ns;
+    if(DATES.indexOf(date)<0){
+      DATES.push(date); DATES.sort(); changed=true;
+      if(!WEEKDAY[date]){ var wd=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date(date+'T12:00:00Z').getUTCDay()]; WEEKDAY[date]=wd+' session'; }
+    }
+    mergeBreadthHist(date, ns);
+    applyToSnap(date, ns);
+  });
+  if(!Object.keys(HIST).length) return;
+  var di=document.getElementById('dateInput');
+  if(di){ di.min=DATES[0]; di.max=DATES[DATES.length-1]; }
+  render(curDate());
+  renderPage();
+}
+function loadHistory(){
+  if(typeof fetch!=='function') return;
+  fetch('data/history.json').then(function(r){ if(!r.ok) throw new Error('history '+r.status); return r.json(); }).then(applyHistory).catch(function(){ /* embedded snapshot stays */ });
+}
+
+var RENDERERS={environment:renderBreadth, leadership:renderLeadership, industries:renderIndustries, positioning:renderPositioning, liquid:renderLiquid};
+route();
+loadHistory();
+
 </script>
 </body>
 </html>
