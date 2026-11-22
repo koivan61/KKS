@@ -27,6 +27,13 @@ What it covers (6 pages; the Screener page was removed from the site):
     > 1M (21-session means), top 2% by 1M return, with 1M return %,
     extension vs 50D SMA (in 50D ATR multiples), avg $ vol, avg shares
     and ADR %; plus a group-leadership summary by GICS sub-industry.
+  - RS Screener: one row per S&P 500 + Nasdaq-100 constituent for
+    the latest close — 1D/1M/3M/6M returns, RS 1M % vs RSP, RS
+    percentile (0-100), O'Neil RS Rating (1-99), extension vs 50D
+    SMA, ADR %, avg dollar volume, above 50D/200D, off 52W high and
+    9D/9W/9M EMA position. Written to data/rs.json (single latest
+    session, not a history list). Needs ~2 years of constituent
+    closes, so constituents are fetched with period="2y".
 
 Sources (all free / public):
   - Yahoo Finance via yfinance: daily OHLCV. Yahoo has no official
@@ -67,6 +74,9 @@ Behaviour (unchanged from the original script):
   - On any fetch failure the script prints a warning, exits 0 and
     leaves the last good history.json untouched. Sections whose data
     could not be fetched are null in the new session — never invented.
+    The same applies to data/rs.json: if the RS rows cannot be
+    computed (or cover fewer than RS_MIN_ROWS tickers), the last
+    good rs.json is left untouched.
 
 Usage:
     pip install -r scripts/requirements.txt
@@ -74,6 +84,8 @@ Usage:
 
 Output:
     data/history.json  — { "as_of": "YYYY-MM-DD", "sessions": [...] }
+    data/rs.json       — { "as_of", "close_date", "universe", "count",
+                           "rows": [...] } for the latest close only.
 """
 from __future__ import annotations
 
@@ -90,6 +102,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_PATH = ROOT / "data" / "history.json"
+RS_PATH = ROOT / "data" / "rs.json"
+RS_UNIVERSE = "SP500+NDX100"
+# RS Rating needs four 63-session quarters (252 sessions back) plus
+# the 6M window (126 sessions); constituents are fetched with 2y of
+# history so both are covered.
+SESSIONS_3M = 63
+SESSIONS_6M = 126
+RS_MIN_ROWS = 100  # below this, a run is treated as a failed fetch
+# and the last good rs.json is left untouched.
 
 TAPE = ["SPY", "QQQ", "IWM", "DIA", "RSP", "QQQE", "SPMO", "TLT"]
 INDEX_NAMES = {
@@ -484,9 +505,10 @@ class _TablesParser(HTMLParser):
             self._buf += data
 
 
-def _parse_constituent_table(html: str) -> list[tuple[str, str, str]]:
-    """(yahoo ticker, GICS sector, GICS sub-industry) from a Wikipedia
-    constituents table; [] when the table cannot be found."""
+def _parse_constituent_table(html: str) -> list[tuple[str, str, str, str]]:
+    """(yahoo ticker, GICS sector, GICS sub-industry, company name)
+    from a Wikipedia constituents table; [] when the table cannot be
+    found."""
     parser = _TablesParser()
     parser.feed(html)
     for table in parser.tables:
@@ -498,6 +520,7 @@ def _parse_constituent_table(html: str) -> list[tuple[str, str, str]]:
         sym_i = next(i for i, h in enumerate(header) if h in ("symbol", "ticker"))
         sec_i = next((i for i, h in enumerate(header) if "sector" in h and "sub" not in h), None)
         sub_i = next((i for i, h in enumerate(header) if "sub-industry" in h or "sub industry" in h), None)
+        name_i = next((i for i, h in enumerate(header) if "security" in h or "company" in h), None)
         out = []
         for row in table[1:]:
             if len(row) <= sym_i:
@@ -507,27 +530,29 @@ def _parse_constituent_table(html: str) -> list[tuple[str, str, str]]:
                 continue
             sector = row[sec_i] if sec_i is not None and len(row) > sec_i else ""
             sub = row[sub_i] if sub_i is not None and len(row) > sub_i else sector
-            out.append((yahoo_ticker(sym), sector, sub or sector))
+            name = row[name_i] if name_i is not None and len(row) > name_i else sym
+            out.append((yahoo_ticker(sym), sector, sub or sector, name))
         if out:
             return out
     return []
 
 
 def fetch_constituents() -> dict:
-    """{yahoo ticker: (sector, sub-industry)} for S&P 500 + Nasdaq-100.
+    """{yahoo ticker: (sector, sub-industry, company name)} for
+    S&P 500 + Nasdaq-100.
 
     Returns {} when neither list can be fetched — callers must then
     leave breadth/liquid null instead of inventing values.
     """
-    out: dict[str, tuple[str, str]] = {}
+    out: dict[str, tuple[str, str, str]] = {}
     for url in (SPX_LIST_URL, NDX_LIST_URL):
         try:
             html = _http_get(url, timeout=30).decode("utf-8", "ignore")
         except Exception as exc:  # noqa: BLE001
             print(f"Constituent list fetch failed ({url}): {exc}", file=sys.stderr)
             continue
-        for sym, sector, sub in _parse_constituent_table(html):
-            out.setdefault(sym, (sector, sub))
+        for sym, sector, sub, name in _parse_constituent_table(html):
+            out.setdefault(sym, (sector, sub, name))
     if out:
         print(f"Constituents: {len(out)} tickers (S&P 500 + Nasdaq-100)")
     return out
@@ -863,6 +888,137 @@ def _group_by_industry(tickers, constituents: dict) -> dict:
     return groups
 
 
+# ---------------------------------------------------------------- RS screener
+
+def _r1(x) -> float | None:
+    """Round to 1 decimal place; None for NaN / missing."""
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return round(v, 1) if math.isfinite(v) else None
+
+
+def _rank_1_99(value: float, population: list[float]) -> int | None:
+    """O'Neil-style percentile rank scaled to 1-99 (integer)."""
+    pop = sorted(v for v in population if v is not None)
+    if not pop or value is None:
+        return None
+    below = sum(1 for v in pop if v < value)
+    equal = sum(1 for v in pop if v == value)
+    if len(pop) == 1:
+        return 50
+    rank = (below + 0.5 * equal) / (len(pop) - 1) * 98.0 + 1.0
+    return max(1, min(99, int(round(rank))))
+
+
+def compute_rs_rows(const_ohlcv: dict, constituents: dict,
+                    bench_frame, close_date: str) -> list[dict]:
+    """One RS Screener row per S&P 500 + Nasdaq-100 constituent for
+    `close_date`.
+
+    const_ohlcv: {ticker: OHLCV frame} with ~2y of history (the RS
+    Rating needs 252 sessions back). bench_frame is the RSP frame.
+    Rows are sorted by rs_pct descending. A value that cannot be
+    computed (e.g. a recent IPO with < 252 sessions for the RS
+    Rating) is null, never invented. Tickers with no close on
+    close_date are left out entirely.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return []
+    tickers = [t for t in constituents if t in const_ohlcv]
+    if not tickers or bench_frame is None or close_date not in bench_frame.index:
+        return []
+    closes = pd.DataFrame({t: const_ohlcv[t]["Close"] for t in tickers})
+    highs = pd.DataFrame({t: const_ohlcv[t]["High"] for t in tickers})
+    vols = pd.DataFrame({t: const_ohlcv[t]["Volume"] for t in tickers})
+    closes = closes.sort_index()
+    highs = highs.sort_index()
+    vols = vols.sort_index()
+    if close_date not in closes.index:
+        return []
+    pos = list(closes.index).index(close_date)
+    # Benchmark 1M return (21 sessions back, RSP's own calendar).
+    bench_pos = list(bench_frame.index).index(close_date)
+    bench_1m = _ret_at(bench_frame, bench_pos, SESSIONS_1M)
+
+    close = closes.iloc[pos]
+    ret_1d = closes.pct_change(1).iloc[pos] * 100.0
+    ret_1m = closes.pct_change(SESSIONS_1M).iloc[pos] * 100.0
+    ret_3m = closes.pct_change(SESSIONS_3M).iloc[pos] * 100.0
+    ret_6m = closes.pct_change(SESSIONS_6M).iloc[pos] * 100.0
+    # O'Neil RS Rating: four 63-session quarterly returns, weighted
+    # 0.4 / 0.2 / 0.2 / 0.2, percentile ranked 1-99 across the
+    # universe. Needs 252 sessions of history per ticker.
+    weighted = pd.Series(float("nan"), index=tickers, dtype=float)
+    if pos >= SESSIONS_52W:
+        q1 = closes.iloc[pos] / closes.iloc[pos - 63] - 1.0
+        q2 = closes.iloc[pos - 63] / closes.iloc[pos - 126] - 1.0
+        q3 = closes.iloc[pos - 126] / closes.iloc[pos - 189] - 1.0
+        q4 = closes.iloc[pos - 189] / closes.iloc[pos - 252] - 1.0
+        weighted = 0.4 * q1 + 0.2 * q2 + 0.2 * q3 + 0.2 * q4
+    sma50 = closes.rolling(50, min_periods=50).mean().iloc[pos]
+    sma200 = closes.rolling(200, min_periods=200).mean().iloc[pos]
+    adr = closes.pct_change().abs().mul(100.0).rolling(21, min_periods=21).mean().iloc[pos]
+    dollar_vol = closes.mul(vols).rolling(21, min_periods=21).mean().iloc[pos] / 1_000_000.0
+    high_52w = highs.rolling(252, min_periods=1).max().iloc[pos]
+    ema_9d = closes.ewm(span=9, adjust=False).mean().iloc[pos]
+    ema_9w = closes.ewm(span=45, adjust=False).mean().iloc[pos]
+    ema_9m = closes.ewm(span=189, adjust=False).mean().iloc[pos]
+
+    universe_1m = [float(v) for v in ret_1m.dropna()]
+    weighted_pop = [float(v) for v in weighted.dropna()]
+    rows: list[dict] = []
+    for t in tickers:
+        px = _num(close.get(t))
+        if px is None:
+            continue  # no close on close_date: row left out, not invented
+        r1m = _num(ret_1m.get(t))
+        sector, sub, name = constituents[t]
+        rows.append({
+            "ticker": t,
+            "name": name or t,
+            "industry": sub or sector or "Other",
+            "price": round(px, 2),
+            "ret_1d_pct": _r1(ret_1d.get(t)),
+            "ret_1m_pct": _r1(r1m),
+            "ret_3m_pct": _r1(ret_3m.get(t)),
+            "ret_6m_pct": _r1(ret_6m.get(t)),
+            "rs_1m_vs_rsp_pct": _r1(r1m - bench_1m) if r1m is not None and bench_1m is not None else None,
+            # _pct_rank can overshoot 100 for the top-ranked value
+            # (mid-rank tie handling); clamp to the 0-100 range.
+            "rs_pct": min(100.0, _pct_rank(r1m, universe_1m)) if r1m is not None else None,
+            "rs_rating": _rank_1_99(_num(weighted.get(t)), weighted_pop),
+            "ext_50d_pct": _r1((px / _num(sma50.get(t)) - 1.0) * 100.0) if _num(sma50.get(t)) else None,
+            "adr_pct": _r1(adr.get(t)),
+            "avg_dollar_vol_m": _r1(dollar_vol.get(t)),
+            "above_50d": bool(px > _num(sma50.get(t))) if _num(sma50.get(t)) else None,
+            "above_200d": bool(px > _num(sma200.get(t))) if _num(sma200.get(t)) else None,
+            "off_52w_high_pct": _r1((px / _num(high_52w.get(t)) - 1.0) * 100.0) if _num(high_52w.get(t)) else None,
+            "ema_9d": bool(px > _num(ema_9d.get(t))) if pos >= 8 and _num(ema_9d.get(t)) else None,
+            "ema_9w": bool(px > _num(ema_9w.get(t))) if pos >= 44 and _num(ema_9w.get(t)) else None,
+            "ema_9m": bool(px > _num(ema_9m.get(t))) if pos >= 188 and _num(ema_9m.get(t)) else None,
+        })
+    rows.sort(key=lambda r: (r["rs_pct"] is None, -(r["rs_pct"] or 0)))
+    return rows
+
+
+def write_rs_snapshot(rows: list[dict], close_date: str) -> None:
+    """Write data/rs.json for one close date (latest session only)."""
+    payload = {
+        "as_of": close_date,
+        "close_date": close_date,
+        "universe": RS_UNIVERSE,
+        "count": len(rows),
+        "rows": rows,
+    }
+    RS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RS_PATH.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"RS screener: wrote {len(rows)} rows to {RS_PATH} (as_of={close_date})")
+
+
 # ---------------------------------------------------------------- sessions
 
 def build_sessions(etf_ohlcv: dict, const_ohlcv: dict, constituents: dict,
@@ -1049,8 +1205,17 @@ def main() -> int:
     constituents = fetch_constituents()
     const_ohlcv: dict = {}
     if constituents:
+        # 2y of history: the RS Rating needs 252 sessions back, and
+        # breadth/liquid reuse the same frames.
         print(f"Fetching constituent OHLCV for {len(constituents)} tickers ...")
-        const_ohlcv = fetch_ohlcv(sorted(constituents), period="6mo")
+        const_ohlcv = fetch_ohlcv(sorted(constituents), period="2y")
+        missing = [t for t in constituents if t not in const_ohlcv]
+        if missing:
+            print(f"Stooq fallback for {len(missing)} missing constituents ...")
+            for ticker in missing:
+                got = fetch_stooq(ticker)
+                if got is not None:
+                    const_ohlcv[ticker] = got["frame"]
         if not const_ohlcv:
             print("Constituent OHLCV fetch failed; breadth/liquid will be null.")
     else:
@@ -1060,6 +1225,18 @@ def main() -> int:
     cot = fetch_cot()
     if cot is None:
         print("COT unavailable; carrying forward the last published report.")
+
+    # RS Screener (single latest session). Regenerated on every run,
+    # even when history.json gains no new session.
+    if const_ohlcv and constituents and BENCHMARK in etf_ohlcv:
+        rs_close = etf_ohlcv[BENCHMARK].index[-1]
+        rs_rows = compute_rs_rows(const_ohlcv, constituents,
+                                  etf_ohlcv[BENCHMARK], rs_close)
+        if len(rs_rows) >= RS_MIN_ROWS:
+            write_rs_snapshot(rs_rows, rs_close)
+        else:
+            print(f"RS screener: only {len(rs_rows)} rows for {rs_close}; "
+                  "leaving rs.json unchanged.")
 
     new_sessions = [s for s in build_sessions(
         etf_ohlcv, const_ohlcv, constituents, cot, existing_sessions)

@@ -2,9 +2,11 @@
 
 A finance market-console in light grey (background
 rgb(184, 184, 184), bullish rgb(117, 117, 117), bearish black):
-sticky header with date navigation, 6 pages — Debrief,
+sticky header with date navigation, 7 pages — Debrief,
 Breadth, Market Strength, Industry Group Strength,
-Positioning and Liquid Leadership. There is no Screener page.
+Positioning, Liquid Leadership and RS Screener. The old
+NELL/OSB Screener page was removed; the RS Screener is a
+new page built on relative strength.
 
 ## How to publish
 
@@ -18,17 +20,21 @@ Positioning and Liquid Leadership. There is no Screener page.
 `data/history.json` (same folder) and re-renders every panel
 from the sessions in that file; if the file cannot be fetched
 it falls back to the embedded 2026-11-20 / 2026-11-19 snapshot,
-so no panel ever goes blank.
+so no panel ever goes blank. The RS Screener page additionally
+fetches `data/rs.json` (one row per stock for the latest close);
+if that file cannot be fetched it falls back to its embedded
+2026-11-20 snapshot.
 
 ## Files
 
 | Path | What it is |
 | --- | --- |
-| `index.html` | The 6-page site (single file, no build step) |
-| `data/history.json` | Sessions by close date. Sample sessions cover 2026-11-13 to 2026-11-20; the 2026-11-20 close matches the reference (SPY -3.64%, SPX 6,914.4, UNG leader +12.3% vs RSP, Natural gas Crowded Short). |
-| `scripts/fetch_data.py` | Fetches daily data and appends new sessions. Run it locally or via Actions. |
+| `index.html` | The 7-page site (single file, no build step) |
+| `data/history.json` | Sessions by close date. Sample sessions in this file cover 2026-11-19 to 2026-11-20 (the page's embedded snapshot covers 2026-11-13 to 2026-11-20); the 2026-11-20 close matches the reference (SPY -3.64%, SPX 6,914.4, UNG leader +12.3% vs RSP, Natural gas Crowded Short). |
+| `data/rs.json` | RS Screener snapshot for the latest close only: `{as_of, close_date, universe: "SP500+NDX100", count, rows}`. Initial snapshot is 2026-11-20, 517 rows of the 518-ticker universe (SNDK had no 2026-11-20 bar on Yahoo and is left out). Percentages are to 1 decimal place. |
+| `scripts/fetch_data.py` | Fetches daily data and appends new sessions; also regenerates `data/rs.json`. Run it locally or via Actions. |
 | `scripts/requirements.txt` | `yfinance`, `pandas` |
-| `.github/workflows/update-data.yml` | Weekdays at 22:00 UTC: fetch, then commit `data/history.json` if a new session appeared. |
+| `.github/workflows/update-data.yml` | Weekdays at 22:00 UTC: fetch, then commit `data/history.json` and `data/rs.json` if either changed. |
 | `.nojekyll` | Tells GitHub Pages not to run Jekyll. |
 
 ## Auto-update — what it covers
@@ -58,6 +64,18 @@ sessions; on fetch failure it exits 0 and leaves the last good
   avg dollar volume > $100M and avg shares > 1M, top 2% by
   1M return, with extension vs 50D SMA, avg $ vol, avg shares
   and ADR%, plus the 12-row group summary.
+- **RS Screener**: one row per S&P 500 + Nasdaq-100
+  constituent for the latest close, from ~2y of closes
+  (constituents are fetched with `period="2y"`): 1D / 1M /
+  3M / 6M returns, RS 1M % vs RSP, RS percentile (0–100),
+  O'Neil RS Rating (1–99), extension vs 50D SMA, ADR %,
+  avg dollar volume, above 50D / 200D, off 52W high and
+  9D / 9W / 9M EMA position. Names and industries come from
+  the Wikipedia constituent tables (GICS sub-industry).
+  Written to `data/rs.json` (latest close only, not a
+  history list) on every run, even when `history.json`
+  gains no new session; if fewer than 100 rows can be
+  computed the last good `rs.json` is left untouched.
 
 ## Known limits
 
@@ -77,7 +95,21 @@ sessions; on fetch failure it exits 0 and leaves the last good
   is the GitHub Actions run after upload. Yahoo Finance has no
   official public API; `yfinance` uses its chart endpoints, so
   a fetch can fail — when it does, the workflow keeps the last
-  good `history.json`.
+  good `history.json` / `rs.json`. Note: the initial
+  `data/rs.json` (2026-11-20, 517 rows) was built in the
+  sandbox by calling Yahoo's chart endpoint directly with
+  urllib, because yfinance's own transport times out there
+  and Stooq closes the connection; the fetcher itself still
+  uses yfinance + Stooq, which is what the Actions run uses.
+- **RS Screener limits**: a stock with no bar on the close
+  date is left out of `rs.json` (e.g. SNDK on 2026-11-20);
+  the O'Neil RS Rating is null for stocks with under 252
+  sessions of history (recent IPOs / index additions, e.g.
+  FDXF, VYLR, HONA, SPCX on 2026-11-20) — never estimated.
+  The two RS measures differ by design: RS percentile ranks
+  the 1M return vs RSP over 21 sessions, while the O'Neil
+  rating ranks a weighted 12-month return (0.4× latest
+  quarter + 0.2× each prior quarter) 1–99.
 - **TradingView**: charts only, via its embed widgets
   (Advanced Real-Time Chart). TradingView is **not** a data API
   for this site — the numbers come from `history.json`.
@@ -89,8 +121,22 @@ sessions; on fetch failure it exits 0 and leaves the last good
 
 ## Definitions used on the page
 
-- `1D` = last session. `1M` = 21 sessions.
+- `1D` = last session. `1M` = 21 sessions. `3M` = 63 sessions.
+  `6M` = 126 sessions.
 - Strength benchmark = RSP (equal-weight S&P 500 ETF).
+- RS percentile (`rs_pct`) = percentile rank (0–100) of the
+  stock's 1M return inside the S&P 500 + Nasdaq-100 universe;
+  `rs_1m_vs_rsp_pct` = stock 1M return minus RSP 1M return.
+- O'Neil RS Rating (`rs_rating`) = percentile rank (1–99) of
+  the weighted quarterly return 0.4×Q1 + 0.2×Q2 + 0.2×Q3 +
+  0.2×Q4, where each Q is a 63-session return; needs 252
+  sessions of history.
+- `ADR %` on the RS Screener = mean absolute daily % move
+  over the last 21 sessions (the Liquid page's ADR % is mean
+  true-range % instead).
+- `ext_50d_pct` = (close − 50D SMA) / 50D SMA × 100.
+- `ema_9d` / `ema_9w` / `ema_9m` = close above the 9-session /
+  45-session / 189-session EMA.
 - `ATR index` = session move standardised by ATR.
 - `Thrust` = recent acceleration in 1M strength.
 - Positioning percentiles are 5-year percentiles for Large specs,
