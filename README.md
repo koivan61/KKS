@@ -31,11 +31,12 @@ if that file cannot be fetched it falls back to its embedded
 | --- | --- |
 | `index.html` | The 7-page site (single file, no build step) |
 | `data/history.json` | Sessions by close date. Sample sessions in this file cover 2026-11-19 to 2026-11-20 (the page's embedded snapshot covers 2026-11-13 to 2026-11-20); the 2026-11-20 close matches the reference (SPY -3.64%, SPX 6,914.4, UNG leader +12.3% vs RSP, Natural gas Crowded Short). |
-| `data/rs.json` | RS Screener snapshot for the latest close only: `{as_of, close_date, universe: "SP500+NDX100", count, rows}`. Initial snapshot is 2026-11-20, 517 rows of the 518-ticker universe (SNDK had no 2026-11-20 bar on Yahoo and is left out). Percentages are to 1 decimal place. |
+| `data/rs.json` | RS Screener snapshot for the latest close only: `{as_of, close_date, universe: "LIQUID-ADV100M", count, rows}`. Snapshot is 2026-11-20, 997 rows of the 998-ticker liquid universe (SNDK had no 2026-11-20 bar on Yahoo and is left out). Percentages are to 1 decimal place. |
+| `data/liquid_universe.json` | The liquid universe: `{as_of, count, tickers, names}` — all US-listed common stocks with 30-session mean dollar volume > $100M as of the listed close (2026-11-20: 998 tickers, screened from 6,242 Nasdaq Trader common stocks). Re-screened on the Monday run or when the stored list is 7+ days old; the nightly run never re-scans the full list. |
 | `data/industry_weekly.json` | Weekly OHLC candles for the Industry Group Strength charts, latest close only: `{as_of, weeks: 12, candles: {ticker: [{w, o, h, l, c}]}}`. One bar per ISO week, ending on each week's last trading day, last 12 weeks. Initial snapshot is 2026-11-20, 168 of the 173 ETFs (AMJ, KBWR, GXG, MOON returned 404 from Yahoo and CLIX had only one daily bar left in the window; all left out, never invented). Regenerated on every run from the daily bars already fetched. |
 | `scripts/fetch_data.py` | Fetches daily data and appends new sessions; also regenerates `data/rs.json`. Run it locally or via Actions. |
 | `scripts/requirements.txt` | `yfinance`, `pandas` |
-| `.github/workflows/update-data.yml` | Weekdays at 22:00 UTC: fetch, then commit `data/history.json`, `data/rs.json` and `data/industry_weekly.json` if any changed. |
+| `.github/workflows/update-data.yml` | Weekdays at 22:00 UTC: fetch, then commit `data/history.json`, `data/rs.json`, `data/industry_weekly.json` and `data/liquid_universe.json` if any changed. |
 | `.nojekyll` | Tells GitHub Pages not to run Jekyll. |
 
 ## Auto-update — what it covers
@@ -81,18 +82,25 @@ sessions; on fetch failure it exits 0 and leaves the last good
   avg dollar volume > $100M and avg shares > 1M, top 2% by
   1M return, with extension vs 50D SMA, avg $ vol, avg shares
   and ADR%, plus the 12-row group summary.
-- **RS Screener**: one row per S&P 500 + Nasdaq-100
-  constituent for the latest close, from ~2y of closes
-  (constituents are fetched with `period="2y"`): 1D / 1M /
-  3M / 6M returns, RS 1M % vs RSP, RS percentile (0–100),
-  O'Neil RS Rating (1–99), extension vs 50D SMA, ADR %,
+- **RS Screener**: one row per stock in the liquid universe
+  (all US-listed common stocks with 30-session mean dollar
+  volume > $100M, from the Nasdaq Trader lists, re-screened
+  weekly — see `data/liquid_universe.json`) for the latest
+  close, from ~2y of closes (stocks are fetched with
+  `period="2y"`): 1D / 1M / 3M / 6M returns, RS 1M % vs RSP,
+  RS percentile (0–100), O'Neil RS Rating (1–99, ranked
+  within the liquid universe), extension vs 50D SMA, ADR %,
   avg dollar volume, above 50D / 200D, off 52W high and
-  9D / 9W / 9M EMA position. Names and industries come from
-  the Wikipedia constituent tables (GICS sub-industry).
+  9D / 9W / 9M EMA position. Names come from the Nasdaq Trader
+  lists (short Wikipedia names where the stock is in the old
+  S&P 500 / Nasdaq-100 snapshot); industries from the Wikipedia
+  S&P 500 / 400 / 600 and Nasdaq-100 tables, else "Other".
   Written to `data/rs.json` (latest close only, not a
   history list) on every run, even when `history.json`
   gains no new session; if fewer than 100 rows can be
   computed the last good `rs.json` is left untouched.
+  `data/rs_preview_100.json` holds the top 100 rows by 1M
+  return for the page fallback.
 
 ## Known limits
 
@@ -112,19 +120,25 @@ sessions; on fetch failure it exits 0 and leaves the last good
   is the GitHub Actions run after upload. Yahoo Finance has no
   official public API; `yfinance` uses its chart endpoints, so
   a fetch can fail — when it does, the workflow keeps the last
-  good `history.json` / `rs.json` / `industry_weekly.json`. Note: the initial
-  `data/rs.json` (2026-11-20, 517 rows) was built in the
-  sandbox by calling Yahoo's chart endpoint directly with
-  urllib, because yfinance's own transport times out there
-  and Stooq closes the connection; the fetcher itself still
-  uses yfinance + Stooq, which is what the Actions run uses.
+  good `history.json` / `rs.json` / `industry_weekly.json` /
+  `liquid_universe.json`. Note: the initial
+  `data/rs.json` (2026-11-20, 997 rows over the 998-ticker
+  liquid universe) was built in the sandbox by calling Yahoo's
+  chart endpoint directly with urllib, because yfinance's own
+  transport times out there and Stooq closes the connection;
+  the fetcher itself still uses yfinance + Stooq, which is what
+  the Actions run uses.
   The initial `data/industry_weekly.json` (2026-11-20, 168
   ETFs) was built the same way.
 - **RS Screener limits**: a stock with no bar on the close
   date is left out of `rs.json` (e.g. SNDK on 2026-11-20);
   the O'Neil RS Rating is null for stocks with under 252
-  sessions of history (recent IPOs / index additions, e.g.
-  FDXF, VYLR, HONA, SPCX on 2026-11-20) — never estimated.
+  sessions of history (recent IPOs, e.g. FDXF, MDLN, VYLR,
+  SUNB, HONA, BSP, SPCX, MMED, PURR, SKHY, CBRS, FPS on
+  2026-11-20) — never estimated. The liquid universe itself
+  is re-screened weekly, so names near the $100M bar can move
+  in or out; ETNs, LP common units, ETFs, funds, preferreds,
+  warrants and rights are excluded by design.
   The two RS measures differ by design: RS percentile ranks
   the 1M return vs RSP over 21 sessions, while the O'Neil
   rating ranks a weighted 12-month return (0.4× latest
@@ -144,7 +158,7 @@ sessions; on fetch failure it exits 0 and leaves the last good
   5 sessions. `3M` = 63 sessions. `6M` = 126 sessions.
 - Strength benchmark = RSP (equal-weight S&P 500 ETF).
 - RS percentile (`rs_pct`) = percentile rank (0–100) of the
-  stock's 1M return inside the S&P 500 + Nasdaq-100 universe;
+  stock's 1M return inside the liquid universe (998 stocks);
   `rs_1m_vs_rsp_pct` = stock 1M return minus RSP 1M return.
   `rs_1w_vs_rsp_pct` is the same over 1W (trailing 5 sessions):
   stock 5-session return minus RSP 5-session return.

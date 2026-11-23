@@ -241,6 +241,10 @@ table.data td.name,table.data th:first-child{white-space:normal}
 .rs-rating.hi{background:#000;color:#fff}
 .rs-rating.lo{background:rgba(0,0,0,.14)}
 input[type=range].rs-range{width:170px;accent-color:#000;min-height:36px}
+.rs-pager{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px}
+.rs-pager .tbtn{padding:6px 12px;min-height:32px}
+.rs-pager .tbtn:disabled{opacity:.4;cursor:default}
+.rs-pager-note{color:var(--muted);font-size:12.5px;margin-left:4px}
 .rs-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .rs-table-wrap table.data td,.rs-table-wrap table.data th{padding-left:8px;padding-right:8px}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -1331,67 +1335,45 @@ function loadIndWeekly(){
 }
 
 // ================= RS Screener =================
-// Universe: S&P 500 + Nasdaq-100 constituents, deduplicated. The embedded snapshot below
-// covers the 2026-11-20 close; when data/rs.json is present it replaces the snapshot
-// (see loadRS at the end of this section). RS 1M is measured vs RSP (RSP 1M = -3.4% at
-// the snapshot close). RS percentile ranks RS 1M vs RSP inside the universe (0-100).
-// O'Neil RS Rating ranks the weighted quarterly score (0.4 x most recent quarter +
-// 0.2 x each of the prior three quarters) inside the universe, scaled 1-99.
-var RS_RAW =
-"NVDA|NVIDIA|Semiconductors;AVGO|Broadcom|Semiconductors;AMD|Advanced Micro Devices|Semiconductors;QCOM|Qualcomm|Semiconductors;TXN|Texas Instruments|Semiconductors;MU|Micron Technology|Semiconductors;AMAT|Applied Materials|Semiconductors;LRCX|Lam Research|Semiconductors;KLAC|KLA Corp|Semiconductors;INTC|Intel|Semiconductors;ADI|Analog Devices|Semiconductors;MRVL|Marvell Technology|Semiconductors;ON|ON Semiconductor|Semiconductors;NXPI|NXP Semiconductors|Semiconductors;MCHP|Microchip Technology|Semiconductors;MPWR|Monolithic Power|Semiconductors;TER|Teradyne|Semiconductors;ENTG|Entegris|Semiconductors;SWKS|Skyworks Solutions|Semiconductors;QRVO|Qorvo|Semiconductors;LSCC|Lattice Semiconductor|Semiconductors;RMBS|Rambus|Semiconductors;ARM|Arm Holdings|Semiconductors;ALAB|Astera Labs|Semiconductors;CRDO|Credo Technology|Semiconductors;SMCI|Super Micro Computer|Semiconductors;WDC|Western Digital|Storage & Memory;STX|Seagate Technology|Storage & Memory;SNDK|SanDisk|Storage & Memory;NTAP|NetApp|Storage & Memory;PSTG|Pure Storage|Storage & Memory;"
-+"MSFT|Microsoft|Software & Cloud;AAPL|Apple|Consumer Technology;ORCL|Oracle|Software & Cloud;CRM|Salesforce|Software & Cloud;ADBE|Adobe|Software & Cloud;NOW|ServiceNow|Software & Cloud;INTU|Intuit|Software & Cloud;PANW|Palo Alto Networks|Cybersecurity;CRWD|CrowdStrike|Cybersecurity;PLTR|Palantir Technologies|Data Software;APP|AppLovin|Mobile Software;SNOW|Snowflake|Data Software;DDOG|Datadog|Software & Cloud;NET|Cloudflare|Software & Cloud;ZS|Zscaler|Cybersecurity;FTNT|Fortinet|Cybersecurity;CDNS|Cadence Design|Software & Cloud;SNPS|Synopsys|Software & Cloud;ADSK|Autodesk|Software & Cloud;WDAY|Workday|Software & Cloud;TEAM|Atlassian|Software & Cloud;HUBS|HubSpot|Software & Cloud;MDB|MongoDB|Data Software;IOT|Samsara|Software & Cloud;ANSS|Ansys|Software & Cloud;TYL|Tyler Technologies|Software & Cloud;PAYC|Paycom Software|Software & Cloud;MANH|Manhattan Associates|Software & Cloud;GEN|Gen Digital|Cybersecurity;AKAM|Akamai Technologies|Software & Cloud;FFIV|F5 Inc|Software & Cloud;JNPR|Juniper Networks|Networking;ANET|Arista Networks|Networking;CSCO|Cisco Systems|Networking;DELL|Dell Technologies|Consumer Technology;HPQ|HP Inc|Consumer Technology;HPE|Hewlett Packard Enterprise|Consumer Technology;IBM|IBM|Software & Cloud;ACN|Accenture|IT Services;CTSH|Cognizant|IT Services;FIS|Fidelity National Info|Payments & Fintech;FI|Fiserv|Payments & Fintech;GPN|Global Payments|Payments & Fintech;JKHY|Jack Henry|Payments & Fintech;BR|Broadridge Financial|Payments & Fintech;CDW|CDW Corp|IT Services;IT|Gartner|IT Services;EPAM|EPAM Systems|IT Services;APH|Amphenol|Electronic Components;TEL|TE Connectivity|Electronic Components;GLW|Corning|Electronic Components;KEYS|Keysight Technologies|Electronic Components;GRMN|Garmin|Consumer Technology;JBL|Jabil|Electronic Components;FLEX|Flex Ltd|Electronic Components;TDY|Teledyne Technologies|Electronic Components;ZBRA|Zebra Technologies|Electronic Components;TRMB|Trimble|Electronic Components;PTC|PTC Inc|Software & Cloud;ROP|Roper Technologies|Software & Cloud;CGNX|Cognex|Electronic Components;ENPH|Enphase Energy|Clean Energy Tech;SEDG|SolarEdge|Clean Energy Tech;FSLR|First Solar|Clean Energy Tech;"
-+"GOOGL|Alphabet Class A|Internet & Media;GOOG|Alphabet Class C|Internet & Media;META|Meta Platforms|Internet & Media;NFLX|Netflix|Internet & Media;DIS|Walt Disney|Internet & Media;CMCSA|Comcast|Internet & Media;VZ|Verizon|Telecom;T|AT&T|Telecom;TMUS|T-Mobile US|Telecom;CHTR|Charter Communications|Internet & Media;WBD|Warner Bros Discovery|Internet & Media;PARA|Paramount Global|Internet & Media;FOXA|Fox Corp A|Internet & Media;FOX|Fox Corp B|Internet & Media;NWSA|News Corp A|Internet & Media;NWS|News Corp B|Internet & Media;OMC|Omnicom Group|Advertising;IPG|Interpublic Group|Advertising;TTD|Trade Desk|Advertising;MTCH|Match Group|Internet & Media;EA|Electronic Arts|Gaming;TTWO|Take-Two Interactive|Gaming;RBLX|Roblox|Gaming;LYV|Live Nation|Internet & Media;DASH|DoorDash|Internet & Media;ABNB|Airbnb|Internet & Media;BKNG|Booking Holdings|Internet & Media;UBER|Uber Technologies|Internet & Media;LYFT|Lyft|Internet & Media;SNAP|Snap Inc|Internet & Media;PINS|Pinterest|Internet & Media;"
-+"JPM|JPMorgan Chase|Banks;BAC|Bank of America|Banks;WFC|Wells Fargo|Banks;C|Citigroup|Banks;GS|Goldman Sachs|Banks;MS|Morgan Stanley|Banks;BLK|BlackRock|Asset Management;SCHW|Charles Schwab|Brokers & Exchanges;AXP|American Express|Payments & Fintech;V|Visa|Payments & Fintech;MA|Mastercard|Payments & Fintech;PYPL|PayPal|Payments & Fintech;COF|Capital One|Banks;USB|U.S. Bancorp|Banks;PNC|PNC Financial|Banks;TFC|Truist Financial|Banks;BK|Bank of New York Mellon|Banks;STT|State Street|Banks;NTRS|Northern Trust|Banks;FITB|Fifth Third Bancorp|Banks;MTB|M&T Bank|Banks;RF|Regions Financial|Banks;HBAN|Huntington Bancshares|Banks;KEY|KeyCorp|Banks;CFG|Citizens Financial|Banks;CMA|Comerica|Banks;ZION|Zions Bancorporation|Banks;ALLY|Ally Financial|Banks;SYF|Synchrony Financial|Banks;DFS|Discover Financial|Banks;CME|CME Group|Brokers & Exchanges;ICE|Intercontinental Exchange|Brokers & Exchanges;NDAQ|Nasdaq Inc|Brokers & Exchanges;CBOE|Cboe Global Markets|Brokers & Exchanges;MKTX|MarketAxess|Brokers & Exchanges;HOOD|Robinhood Markets|Brokers & Exchanges;COIN|Coinbase Global|Crypto Platforms;SPGI|S&P Global|Asset Management;MCO|Moody's|Asset Management;MSCI|MSCI Inc|Asset Management;KKR|KKR & Co|Asset Management;BX|Blackstone|Asset Management;APO|Apollo Global|Asset Management;ARES|Ares Management|Asset Management;BEN|Franklin Resources|Asset Management;TROW|T. Rowe Price|Asset Management;IVZ|Invesco|Asset Management;AMP|Ameriprise Financial|Asset Management;LPLA|LPL Financial|Brokers & Exchanges;RJF|Raymond James|Brokers & Exchanges;AFL|Aflac|Insurance;AIG|American International|Insurance;MET|MetLife|Insurance;PRU|Prudential Financial|Insurance;ALL|Allstate|Insurance;TRV|Travelers|Insurance;PGR|Progressive|Insurance;CB|Chubb|Insurance;MMC|Marsh McLennan|Insurance;AON|Aon plc|Insurance;AJG|Arthur J. Gallagher|Insurance;BRO|Brown & Brown|Insurance;WRB|W.R. Berkley|Insurance;CINF|Cincinnati Financial|Insurance;L|Loews|Insurance;HIG|Hartford Financial|Insurance;PFG|Principal Financial|Insurance;UNM|Unum Group|Insurance;LNC|Lincoln National|Insurance;GL|Globe Life|Insurance;ACGL|Arch Capital|Insurance;EG|Everest Group|Insurance;MKL|Markel Group|Insurance;"
-+"LLY|Eli Lilly|Pharmaceuticals;UNH|UnitedHealth|Health Care Services;JNJ|Johnson & Johnson|Pharmaceuticals;ABBV|AbbVie|Pharmaceuticals;MRK|Merck|Pharmaceuticals;AMGN|Amgen|Biotechnology;GILD|Gilead Sciences|Biotechnology;VRTX|Vertex Pharmaceuticals|Biotechnology;REGN|Regeneron|Biotechnology;BIIB|Biogen|Biotechnology;MRNA|Moderna|Biotechnology;ILMN|Illumina|Biotechnology;ALNY|Alnylam Pharmaceuticals|Biotechnology;INCY|Incyte|Biotechnology;BMRN|BioMarin Pharmaceutical|Biotechnology;EXAS|Exact Sciences|Biotechnology;TECH|Bio-Techne|Biotechnology;PFE|Pfizer|Pharmaceuticals;BMY|Bristol-Myers Squibb|Pharmaceuticals;ZTS|Zoetis|Pharmaceuticals;VTRS|Viatris|Pharmaceuticals;BAX|Baxter International|Medical Devices;BDX|Becton Dickinson|Medical Devices;SYK|Stryker|Medical Devices;BSX|Boston Scientific|Medical Devices;MDT|Medtronic|Medical Devices;ABT|Abbott Laboratories|Medical Devices;DHR|Danaher|Medical Devices;TMO|Thermo Fisher Scientific|Life Science Tools;A|Agilent Technologies|Life Science Tools;IQV|IQVIA Holdings|Life Science Tools;MTD|Mettler-Toledo|Life Science Tools;WAT|Waters Corp|Life Science Tools;IDXX|IDEXX Laboratories|Life Science Tools;DXCM|DexCom|Medical Devices;ISRG|Intuitive Surgical|Medical Devices;EW|Edwards Lifesciences|Medical Devices;GEHC|GE HealthCare|Medical Devices;HOLX|Hologic|Medical Devices;ZBH|Zimmer Biomet|Medical Devices;ALGN|Align Technology|Medical Devices;PODD|Insulet|Medical Devices;RMD|ResMed|Medical Devices;COO|Cooper Companies|Medical Devices;WST|West Pharmaceutical|Medical Devices;STE|Steris|Medical Devices;HCA|HCA Healthcare|Health Care Services;THC|Tenet Healthcare|Health Care Services;UHS|Universal Health Services|Health Care Services;CVS|CVS Health|Health Care Services;CI|Cigna Group|Health Care Services;ELV|Elevance Health|Health Care Services;HUM|Humana|Health Care Services;CNC|Centene|Health Care Services;MOH|Molina Healthcare|Health Care Services;MCK|McKesson|Health Care Services;COR|Cencora|Health Care Services;CAH|Cardinal Health|Health Care Services;LH|Labcorp|Health Care Services;DGX|Quest Diagnostics|Health Care Services;CRL|Charles River Labs|Life Science Tools;HSIC|Henry Schein|Health Care Services;XRAY|Dentsply Sirona|Medical Devices;"
-+"AMZN|Amazon.com|Retail & E-commerce;TSLA|Tesla|Autos & EVs;HD|Home Depot|Retail & E-commerce;LOW|Lowe's|Retail & E-commerce;NKE|Nike|Apparel & Luxury;MCD|McDonald's|Restaurants;SBUX|Starbucks|Restaurants;TJX|TJX Companies|Retail & E-commerce;TGT|Target|Retail & E-commerce;ROST|Ross Stores|Retail & E-commerce;DLTR|Dollar Tree|Retail & E-commerce;DG|Dollar General|Retail & E-commerce;ULTA|Ulta Beauty|Retail & E-commerce;LULU|Lululemon Athletica|Apparel & Luxury;DECK|Deckers Outdoor|Apparel & Luxury;ANF|Abercrombie & Fitch|Apparel & Luxury;RL|Ralph Lauren|Apparel & Luxury;TPR|Tapestry|Apparel & Luxury;PVH|PVH Corp|Apparel & Luxury;HAS|Hasbro|Consumer Products;MAT|Mattel|Consumer Products;WHR|Whirlpool|Home & Living;LEG|Leggett & Platt|Home & Living;MHK|Mohawk Industries|Home & Living;TPX|Tempur Sealy|Home & Living;ETSY|Etsy|Retail & E-commerce;EBAY|eBay|Retail & E-commerce;W|Wayfair|Retail & E-commerce;CHWY|Chewy|Retail & E-commerce;KMX|CarMax|Autos & EVs;AZO|AutoZone|Auto Parts;ORLY|O'Reilly Automotive|Auto Parts;AAP|Advance Auto Parts|Auto Parts;GPC|Genuine Parts|Auto Parts;GM|General Motors|Autos & EVs;F|Ford Motor|Autos & EVs;RIVN|Rivian Automotive|Autos & EVs;LCID|Lucid Group|Autos & EVs;APTV|Aptiv|Auto Parts;BWA|BorgWarner|Auto Parts;LEA|Lear Corp|Auto Parts;LKQ|LKQ Corp|Auto Parts;MAR|Marriott International|Hotels & Travel;HLT|Hilton Worldwide|Hotels & Travel;H|Hyatt Hotels|Hotels & Travel;WYNN|Wynn Resorts|Hotels & Travel;LVS|Las Vegas Sands|Hotels & Travel;MGM|MGM Resorts|Hotels & Travel;CZR|Caesars Entertainment|Hotels & Travel;CCL|Carnival Corp|Hotels & Travel;RCL|Royal Caribbean|Hotels & Travel;NCLH|Norwegian Cruise Line|Hotels & Travel;EXPE|Expedia Group|Hotels & Travel;YUM|Yum! Brands|Restaurants;CMG|Chipotle Mexican Grill|Restaurants;DPZ|Domino's Pizza|Restaurants;DRI|Darden Restaurants|Restaurants;LEN|Lennar|Homebuilders;DHI|D.R. Horton|Homebuilders;PHM|PulteGroup|Homebuilders;NVR|NVR Inc|Homebuilders;POOL|Pool Corp|Home & Living;TSCO|Tractor Supply|Retail & E-commerce;BBY|Best Buy|Retail & E-commerce;"
-+"WMT|Walmart|Consumer Staples Retail;COST|Costco Wholesale|Consumer Staples Retail;PG|Procter & Gamble|Household & Personal;KO|Coca-Cola|Beverages;PEP|PepsiCo|Beverages;MNST|Monster Beverage|Beverages;KDP|Keurig Dr Pepper|Beverages;STZ|Constellation Brands|Beverages;BF.B|Brown-Forman|Beverages;TAP|Molson Coors|Beverages;PM|Philip Morris|Tobacco;MO|Altria Group|Tobacco;CL|Colgate-Palmolive|Household & Personal;KMB|Kimberly-Clark|Household & Personal;EL|Estée Lauder|Household & Personal;CHD|Church & Dwight|Household & Personal;CLX|Clorox|Household & Personal;SJM|SJM Smucker|Food Products;HSY|Hershey|Food Products;MDLZ|Mondelez International|Food Products;KHC|Kraft Heinz|Food Products;GIS|General Mills|Food Products;K|Kellanova|Food Products;CPB|Campbell's|Food Products;HRL|Hormel Foods|Food Products;MKC|McCormick|Food Products;TSN|Tyson Foods|Food Products;BG|Bunge Global|Food Products;ADM|Archer-Daniels-Midland|Food Products;KR|Kroger|Consumer Staples Retail;SYY|Sysco|Food Products;WBA|Walgreens Boots Alliance|Consumer Staples Retail;"
-+"XOM|Exxon Mobil|Oil & Gas;CVX|Chevron|Oil & Gas;COP|ConocoPhillips|Oil & Gas;EOG|EOG Resources|Oil & Gas;SLB|SLB Schlumberger|Oil Services;MPC|Marathon Petroleum|Oil & Gas Refining;PSX|Phillips 66|Oil & Gas Refining;VLO|Valero Energy|Oil & Gas Refining;OXY|Occidental Petroleum|Oil & Gas;HES|Hess|Oil & Gas;DVN|Devon Energy|Oil & Gas;FANG|Diamondback Energy|Oil & Gas;HAL|Halliburton|Oil Services;BKR|Baker Hughes|Oil Services;KMI|Kinder Morgan|Midstream;WMB|Williams Companies|Midstream;OKE|ONEOK|Midstream;TRGP|Targa Resources|Midstream;CTRA|Coterra Energy|Oil & Gas;EQT|EQT Corp|Oil & Gas;RRC|Range Resources|Oil & Gas;APA|APA Corp|Oil & Gas;MRO|Marathon Oil|Oil & Gas;NOV|NOV Inc|Oil Services;HP|Helmerich & Payne|Oil Services;FTI|TechnipFMC|Oil Services;"
-+"HON|Honeywell International|Industrials;GE|GE Aerospace|Aerospace & Defense;CAT|Caterpillar|Industrials;DE|Deere & Co|Industrials;BA|Boeing|Aerospace & Defense;RTX|RTX Corp|Aerospace & Defense;LMT|Lockheed Martin|Aerospace & Defense;NOC|Northrop Grumman|Aerospace & Defense;GD|General Dynamics|Aerospace & Defense;LHX|L3Harris Technologies|Aerospace & Defense;TDG|TransDigm Group|Aerospace & Defense;HWM|Howmet Aerospace|Aerospace & Defense;TXT|Textron|Aerospace & Defense;AXON|Axon Enterprise|Aerospace & Defense;UNP|Union Pacific|Transportation;CSX|CSX Corp|Transportation;NSC|Norfolk Southern|Transportation;FDX|FedEx|Transportation;UPS|United Parcel Service|Transportation;DAL|Delta Air Lines|Airlines;UAL|United Airlines|Airlines;LUV|Southwest Airlines|Airlines;AAL|American Airlines|Airlines;ALK|Alaska Air Group|Airlines;JBHT|J.B. Hunt Transport|Transportation;ODFL|Old Dominion Freight|Transportation;XPO|XPO Inc|Transportation;CHRW|C.H. Robinson|Transportation;EXPD|Expeditors International|Transportation;FAST|Fastenal|Industrials;EMR|Emerson Electric|Industrials;ETN|Eaton Corp|Industrials;PH|Parker-Hannifin|Industrials;ROK|Rockwell Automation|Industrials;AME|AMETEK|Industrials;DOV|Dover Corp|Industrials;ITW|Illinois Tool Works|Industrials;CMI|Cummins|Industrials;PCAR|PACCAR|Industrials;OTIS|Otis Worldwide|Industrials;CARR|Carrier Global|Industrials;VRT|Vertiv Holdings|Industrials;IR|Ingersoll Rand|Industrials;XYL|Xylem|Industrials;WAB|Westinghouse Air Brake|Industrials;GNRC|Generac Holdings|Industrials;PNR|Pentair|Industrials;JCI|Johnson Controls|Industrials;TT|Trane Technologies|Industrials;BLDR|Builders FirstSource|Industrials;MAS|Masco|Industrials;SWK|Stanley Black & Decker|Industrials;NDSN|Nordson|Industrials;SNA|Snap-on|Industrials;ALLE|Allegion|Industrials;AOS|A.O. Smith|Industrials;HUBB|Hubbell|Industrials;RRX|Regal Rexnord|Industrials;LDOS|Leidos Holdings|Aerospace & Defense;SAIC|Science Applications|Aerospace & Defense;BAH|Booz Allen Hamilton|Aerospace & Defense;J|Jacobs Solutions|Industrials;PWR|Quanta Services|Industrials;EME|EMCOR Group|Industrials;FIX|Comfort Systems USA|Industrials;URI|United Rentals|Industrials;RSG|Republic Services|Waste & Environmental;WM|Waste Management|Waste & Environmental;VRSK|Verisk Analytics|Industrials;ADP|Automatic Data Processing|Business Services;PAYX|Paychex|Business Services;CTAS|Cintas|Business Services;CSGP|CoStar Group|Business Services;"
-+"LIN|Linde plc|Chemicals & Materials;SHW|Sherwin-Williams|Chemicals & Materials;ECL|Ecolab|Chemicals & Materials;APD|Air Products & Chemicals|Chemicals & Materials;DD|DuPont de Nemours|Chemicals & Materials;DOW|Dow Inc|Chemicals & Materials;PPG|PPG Industries|Chemicals & Materials;LYB|LyondellBasell|Chemicals & Materials;CF|CF Industries|Chemicals & Materials;MOS|Mosaic Co|Chemicals & Materials;NEM|Newmont|Mining & Metals;FCX|Freeport-McMoRan|Mining & Metals;NUE|Nucor|Mining & Metals;STLD|Steel Dynamics|Mining & Metals;X|United States Steel|Mining & Metals;AA|Alcoa|Mining & Metals;BALL|Ball Corp|Packaging;PKG|Packaging Corp|Packaging;IP|International Paper|Packaging;AMCR|Amcor|Packaging;AVY|Avery Dennison|Packaging;IFF|International Flavors|Chemicals & Materials;ALB|Albemarle|Chemicals & Materials;CE|Celanese|Chemicals & Materials;EMN|Eastman Chemical|Chemicals & Materials;FMC|FMC Corp|Chemicals & Materials;VMC|Vulcan Materials|Materials & Construction;MLM|Martin Marietta|Materials & Construction;EXP|Eagle Materials|Materials & Construction;"
-+"NEE|NextEra Energy|Utilities;DUK|Duke Energy|Utilities;SO|Southern Co|Utilities;D|Dominion Energy|Utilities;AEP|American Electric Power|Utilities;EXC|Exelon|Utilities;SRE|Sempra|Utilities;PEG|Public Service Enterprise|Utilities;ED|Consolidated Edison|Utilities;XEL|Xcel Energy|Utilities;EIX|Edison International|Utilities;WEC|WEC Energy Group|Utilities;AWK|American Water Works|Utilities;DTE|DTE Energy|Utilities;PPL|PPL Corp|Utilities;AEE|Ameren|Utilities;CMS|CMS Energy|Utilities;ATO|Atmos Energy|Utilities;ES|Eversource Energy|Utilities;FE|FirstEnergy|Utilities;ETR|Entergy|Utilities;CNP|CenterPoint Energy|Utilities;NI|NiSource|Utilities;EVRG|Evergy|Utilities;AES|AES Corp|Utilities;NRG|NRG Energy|Utilities;VST|Vistra|Utilities;CEG|Constellation Energy|Utilities;PCG|PG&E|Utilities;LNT|Alliant Energy|Utilities;PNW|Pinnacle West|Utilities;"
-+"AMT|American Tower|Real Estate;PLD|Prologis|Real Estate;CCI|Crown Castle|Real Estate;EQIX|Equinix|Real Estate;PSA|Public Storage|Real Estate;DLR|Digital Realty Trust|Real Estate;O|Realty Income|Real Estate;SPG|Simon Property Group|Real Estate;WELL|Welltower|Real Estate;AVB|AvalonBay Communities|Real Estate;EQR|Equity Residential|Real Estate;MAA|Mid-America Apartment|Real Estate;UDR|UDR Inc|Real Estate;ESS|Essex Property Trust|Real Estate;CPT|Camden Property Trust|Real Estate;ARE|Alexandria Real Estate|Real Estate;BXP|Boston Properties|Real Estate;VTR|Ventas|Real Estate;HST|Host Hotels|Real Estate;KIM|Kimco Realty|Real Estate;REG|Regency Centers|Real Estate;FRT|Federal Realty|Real Estate;SBAC|SBA Communications|Real Estate;WY|Weyerhaeuser|Real Estate;INVH|Invitation Homes|Real Estate;SUI|Sun Communities|Real Estate;ELS|Equity LifeStyle|Real Estate;DOC|Healthpeak Properties|Real Estate;CBRE|CBRE Group|Real Estate;"
-+"LITE|Lumentum Holdings|Optical Components;COHR|Coherent Corp|Optical Components;CIEN|Ciena Corp|Optical Networking;VIAV|Viavi Solutions|Optical Components;FN|Fabrinet|Optical Components;CRUS|Cirrus Logic|Semiconductors;SYNA|Synaptics|Semiconductors;OLED|Universal Display|Electronic Components;WOLF|Wolfspeed|Semiconductors;POWI|Power Integrations|Semiconductors;DIOD|Diodes Inc|Semiconductors;FORM|FormFactor|Semiconductors;ACLS|Axcelis Technologies|Semiconductors;ONTO|Onto Innovation|Semiconductors;CAMT|Camtek|Semiconductors;NVMI|Nova Ltd|Semiconductors;UCTT|Ultra Clean Holdings|Semiconductors;ICHR|Ichor Holdings|Semiconductors;MKSI|MKS Instruments|Semiconductors;COHU|Cohu|Semiconductors;AMKR|Amkor Technology|Semiconductors;SLAB|Silicon Laboratories|Semiconductors;SITM|SiTime|Semiconductors;PI|Impinj|Semiconductors;ALGM|Allegro MicroSystems|Semiconductors";
-var RS_BIAS={SNDK:34,WDC:26,MU:22,STX:20,HOOD:24,PLTR:18,APP:20,LITE:19,CIEN:16,COHR:15,CRDO:17,ALAB:16,VRT:14,ANET:12,NVDA:14,AVGO:13,META:9,LLY:10,COIN:15,ARM:13,RBLX:11,AXON:12,GE:11,CAT:8,CEG:10,NRG:12,VST:11,FCX:9,STLD:8,DECK:10,ANF:13,CVNA:20,SMCI:15,IOT:10,NET:11,CRWD:10,PANW:9,NOW:8,MSFT:5,AAPL:4};
-function rsCleanTicker(t){ return t.replace(/2$/,''); }
+// Universe: liquid US-listed common stocks — 30D mean dollar volume above $100M
+// (universe id "LIQUID-ADV100M"; 997 stocks at the 2026-11-20 close). When
+// data/rs.json is present it replaces the embedded fallback below (see loadRS at
+// the end of this section). The embedded fallback is ONLY a preview sample: the
+// top 20 of the 997 by 1M return at the 2026-11-20 close, with real values.
+// RS 1M is measured vs RSP. RS percentile ranks RS 1M vs RSP inside the universe
+// (0-100). O'Neil RS Rating ranks the weighted quarterly score (0.4 x most recent
+// quarter + 0.2 x each of the prior three quarters) inside the universe, 1-99.
+var RS_KEYS=["ticker","name","industry","price","ret_1d_pct","ret_1m_pct","ret_3m_pct","ret_6m_pct","rs_1m_vs_rsp_pct","rs_pct","rs_rating","ext_50d_pct","adr_pct","avg_dollar_vol_m","above_50d","above_200d","off_52w_high_pct","ema_9d","ema_9w","ema_9m"];
+var RS_PREVIEW_ROWS=[
+["SGRY","Surgery Partners, Inc.","Other",26.78,0.3,68.4,92.0,99.9,73.4,100.0,98,44.3,3.3,176.1,true,true,-1.6,true,true,true],
+["INSM","Insmed Incorporated","Other",141.33,-2.2,48.7,14.0,33.0,53.6,99.9,31,27.2,3.7,508.8,true,true,-33.6,true,true,true],
+["ADT","ADT Inc.","Specialized Consumer Services",9.87,-0.1,41.2,33.0,41.6,46.1,99.8,90,27.6,2.2,257.7,true,true,-1.3,true,true,true],
+["LQDA","Liquidia Corporation","Pharmaceuticals",54.43,-3.9,37.1,-22.5,-10.7,42.1,99.7,91,13.9,3.8,123.7,true,false,-41.9,true,true,true],
+["GKOS","Glaukos Corporation","Health Care Equipment",237.31,-0.3,34.3,27.8,97.4,39.2,99.6,98,24.3,3.8,428.4,true,true,-7.0,false,true,true],
+["APP","AppLovin","Advertising",348.29,-8.1,31.8,16.6,-27.7,36.7,99.5,35,12.6,5.3,1989.7,true,false,-52.8,false,true,false],
+["ACM","AECOM","Construction & Engineering",78.65,-2.1,29.3,21.0,9.2,34.2,99.4,33,22.9,2.1,116.2,true,true,-31.8,true,true,true],
+["CROX","Crocs, Inc.","Footwear",154.67,-1.7,27.8,22.9,40.0,32.8,99.3,96,16.9,3.0,216.4,true,true,-5.8,false,true,true],
+["CGON","CG Oncology, Inc. - Common stock","Other",79.47,-3.0,27.1,1.6,23.7,32.0,99.2,93,15.4,4.0,144.5,true,true,-15.4,true,true,true],
+["GMAB","Genmab A/S (ADS)","Other",50.6,-1.5,26.5,53.2,88.3,31.4,99.1,97,17.7,3.4,329.3,true,true,-15.6,false,true,true],
+["CMG","Chipotle Mexican Grill","Restaurants",35.55,-2.1,26.3,-6.5,8.1,31.3,99.0,53,9.4,2.6,618.1,true,true,-14.2,false,true,false],
+["RIOT","Riot Platforms, Inc.","Other",16.23,-8.5,25.9,-18.9,-33.7,30.9,98.9,60,-7.8,5.5,463.6,false,false,-46.5,false,false,false],
+["WING","Wingstop Inc.","Restaurants",151.53,0.1,25.4,29.7,7.9,30.3,98.8,48,16.8,3.3,221.6,true,false,-50.0,false,true,false],
+["JBLU","JetBlue Airways Corporation","Passenger Airlines",3.32,-4.0,25.3,-32.9,-34.3,30.2,98.7,15,-9.3,5.0,100.3,false,false,-49.8,false,false,false],
+["PNR","Pentair","Industrial Machinery & Supplies & Components",68.63,-0.1,23.8,8.4,-8.3,28.7,98.6,21,15.7,2.3,226.6,true,false,-37.1,true,true,false],
+["RYTM","Rhythm Pharmaceuticals, Inc.","Other",112.36,-3.8,23.6,0.8,27.9,28.5,98.5,56,14.6,4.2,209.5,true,true,-8.1,false,true,true],
+["HDB","HDFC Bank Limited","Other",27.42,4.5,22.2,16.5,10.8,27.1,98.4,34,17.0,1.6,231.9,true,true,-26.6,true,true,true],
+["BILL","BILL Holdings, Inc.","Application Software",61.44,-4.1,21.3,27.6,70.0,26.2,98.3,90,24.8,2.5,204.6,true,true,-7.7,true,true,true],
+["SLS","SELLAS Life Sciences Group, Inc.","Other",13.66,-8.1,20.4,-4.7,75.6,25.3,98.2,99,22.4,13.1,233.0,true,true,-45.1,true,true,true],
+["IDXX","Idexx Laboratories","Health Care Equipment",676.21,-1.9,19.3,20.9,20.9,24.3,98.1,64,16.6,2.7,443.3,true,true,-12.2,false,true,true]
+];
 var RS_SNAPSHOT=(function(){
-  var seen={}, list=[];
-  RS_RAW.split(';').forEach(function(part){
-    var p=part.split('|'); if(p.length<3) return;
-    var t=rsCleanTicker(p[0].trim()); if(!t || seen[t]) return; seen[t]=1;
-    list.push({ticker:t, name:p[1].trim(), industry:p[2].trim()});
-  });
-  var RSP_1M=-3.4;
-  var rows=list.map(function(x){
-    var r=seedRand('rs20'+x.ticker);
-    var bias=RS_BIAS[x.ticker]||0;
-    var ret1m=+((r()-0.52)*34 + bias).toFixed(2);
-    var ret3m=+((r()-0.50)*52 + bias*1.4).toFixed(2);
-    var ret6m=+((r()-0.48)*82 + bias*1.8).toFixed(2);
-    var ret1d=+((r()-0.56)*5.6 + bias*0.04).toFixed(2);
-    var q2=(r()-0.5)*42, q3=(r()-0.5)*42, q4=(r()-0.5)*42;
-    var score=0.4*ret3m + 0.2*q2 + 0.2*q3 + 0.2*q4;
-    var ext=+((r()-0.44)*20 + (ret1m>10?4:0)).toFixed(2);
-    var off=+(-Math.max(0.4, Math.min(58, 22 - ret3m*0.35 + r()*14))).toFixed(2);
-    return {ticker:x.ticker, name:x.name, industry:x.industry,
-      price:+(6 + Math.pow(r(),2.1)*880 + bias*6).toFixed(2),
-      ret_1d_pct:ret1d, ret_1m_pct:ret1m, ret_3m_pct:ret3m, ret_6m_pct:ret6m,
-      rs_1m_vs_rsp_pct:+(ret1m - RSP_1M).toFixed(2), _score:score,
-      rs_pct:0, rs_rating:0, ext_50d_pct:ext,
-      adr_pct:+(1.1 + r()*5.6).toFixed(2),
-      avg_dollar_vol_m:+Math.round(4 + Math.pow(r(),3)*2400 + bias*38),
-      above_50d:ext>-1.5, above_200d:ret6m>-6,
-      off_52w_high_pct:off,
-      ema_9d:ret1d>-1.2, ema_9w:ret1m>-4, ema_9m:ret3m>-6};
-  });
-  var byRS=rows.slice().sort(function(a,b){ return a.rs_1m_vs_rsp_pct-b.rs_1m_vs_rsp_pct; });
-  byRS.forEach(function(row,i){ row.rs_pct=Math.round(i/(rows.length-1)*100); });
-  var byScore=rows.slice().sort(function(a,b){ return a._score-b._score; });
-  byScore.forEach(function(row,i){ row.rs_rating=Math.max(1, Math.min(99, 1+Math.floor(i/rows.length*99))); delete row._score; });
-  return {as_of:'2026-11-20', close_date:'2026-11-20', universe:'SP500+NDX100', count:rows.length, rows:rows};
+  var rows=RS_PREVIEW_ROWS.map(function(a){ var o={}; RS_KEYS.forEach(function(k,i){ o[k]=a[i]; }); return o; });
+  return {as_of:'2026-11-20', close_date:'2026-11-20', universe:'LIQUID-ADV100M', universe_count:997, count:rows.length, rows:rows};
 })();
 var RS_BY_DATE={}; // date -> {rows, source}
-var RS_META={date:'2026-11-20', source:'embedded snapshot'};
-var RS_STATE={q:'', industry:'all', minPct:0, minRating:0, minAdr:0, maxExt:'', minVol:0, above50:false, above200:false, sortK:'rs_pct', sortDir:-1};
+var RS_META={date:'2026-11-20', source:'preview sample', preview:true};
+var RS_STATE={q:'', industry:'all', minPct:0, minRating:0, minAdr:0, maxExt:'', minVol:0, above50:false, above200:false, sortK:'rs_pct', sortDir:-1, page:1};
+var RS_PAGE_SIZE=100;
 var RS_COLS=[
   {k:'ticker', label:'Ticker', left:1},
   {k:'name', label:'Name', left:1},
@@ -1424,18 +1406,9 @@ function rsNormRow(r){
 }
 function rsRowsForDate(){
   var date=curDate();
-  if(RS_BY_DATE[date]){ RS_META={date:date, source:'data/rs.json'}; return RS_BY_DATE[date]; }
-  RS_META={date:'2026-11-20', source:'embedded snapshot'};
-  var rows=RS_SNAPSHOT.rows;
-  if(date==='2026-11-20') return rows;
-  var sc=dScale();
-  return rows.map(function(r){
-    var o={}; for(var k in r) o[k]=r[k];
-    ['ret_1d_pct','ret_1m_pct','ret_3m_pct','ret_6m_pct','rs_1m_vs_rsp_pct','ext_50d_pct'].forEach(function(k){ o[k]=+(r[k]*sc).toFixed(2); });
-    o.price=+(r.price*(1+(sc-1)*0.02)).toFixed(2);
-    RS_META={date:date, source:'embedded snapshot (scaled from 2026-11-20)'};
-    return o;
-  });
+  if(RS_BY_DATE[date]){ RS_META={date:date, source:'data/rs.json', preview:false}; return RS_BY_DATE[date]; }
+  RS_META={date:'2026-11-20', source:'preview sample', preview:true};
+  return RS_SNAPSHOT.rows;
 }
 function rsFiltered(){
   var rows=rsRowsForDate(), st=RS_STATE;
@@ -1491,15 +1464,41 @@ function rsTableHTML(shown){
   if(!shown.length) body='<tr><td colspan="'+RS_COLS.length+'" style="text-align:left;color:var(--muted)">No stocks match the current filters. Loosen a filter to see more of the universe.</td></tr>';
   return '<div class="rs-table-wrap"><table class="data" aria-label="Relative strength screener"><thead><tr>'+head+'</tr></thead><tbody>'+body+'</tbody></table></div>';
 }
+function rsPagerHTML(totalPages){
+  if(totalPages<=1) return '';
+  var st=RS_STATE, h='<button class="tbtn" data-rspage="prev"'+(st.page<=1?' disabled':'')+'>‹ Prev</button>';
+  for(var p=1;p<=totalPages;p++) h+='<button class="tbtn'+(p===st.page?' active':'')+'" data-rspage="'+p+'">'+p+'</button>';
+  h+='<button class="tbtn" data-rspage="next"'+(st.page>=totalPages?' disabled':'')+'>Next ›</button>';
+  h+='<span class="rs-pager-note">Page '+st.page+' of '+totalPages+' · '+RS_PAGE_SIZE+' rows per page</span>';
+  return h;
+}
 function updateRSTable(){
   var wrap=document.getElementById('rsTableWrap'); if(!wrap) return;
   var res=rsFiltered();
-  wrap.innerHTML=rsTableHTML(res.shown);
-  var cnt=document.getElementById('rsCount'); if(cnt) cnt.innerHTML='<b>'+res.shown.length+' of '+res.total+' shown</b> · S&amp;P 500 + Nasdaq-100 · benchmark RSP · data date '+RS_META.date+' · source: '+RS_META.source;
+  var totalPages=Math.max(1, Math.ceil(res.shown.length/RS_PAGE_SIZE));
+  if(RS_STATE.page>totalPages) RS_STATE.page=totalPages;
+  if(RS_STATE.page<1) RS_STATE.page=1;
+  var pageRows=res.shown.slice((RS_STATE.page-1)*RS_PAGE_SIZE, RS_STATE.page*RS_PAGE_SIZE);
+  wrap.innerHTML=rsTableHTML(pageRows);
+  var cnt=document.getElementById('rsCount'); if(cnt) cnt.innerHTML='<b>'+res.shown.length+' of '+res.total+' shown</b> · Liquid US stocks · 30D avg $ volume &gt; $100M · benchmark RSP · data date '+RS_META.date+' · source: '+RS_META.source;
+  var pg=document.getElementById('rsPager');
+  if(pg){
+    pg.innerHTML=rsPagerHTML(totalPages);
+    pg.style.display=(totalPages>1)?'flex':'none';
+    var pbs=pg.querySelectorAll('[data-rspage]');
+    for(var j=0;j<pbs.length;j++) pbs[j].addEventListener('click', function(){
+      var v=this.getAttribute('data-rspage');
+      if(v==='prev') RS_STATE.page=Math.max(1, RS_STATE.page-1);
+      else if(v==='next') RS_STATE.page=Math.min(totalPages, RS_STATE.page+1);
+      else RS_STATE.page=parseInt(v,10)||1;
+      updateRSTable();
+    });
+  }
   var ths=wrap.querySelectorAll('th[data-rsk]');
   for(var i=0;i<ths.length;i++) ths[i].addEventListener('click', function(){
     var k=this.getAttribute('data-rsk');
     if(RS_STATE.sortK===k) RS_STATE.sortDir*=-1; else { RS_STATE.sortK=k; RS_STATE.sortDir=(k==='ticker'||k==='name'||k==='industry')?1:-1; }
+    RS_STATE.page=1;
     updateRSTable();
   });
   var ex=document.getElementById('rsExport'); if(ex) ex.setAttribute('data-tickers', res.shown.map(function(r){ return r.ticker; }).join(','));
@@ -1513,7 +1512,8 @@ function renderRSScreener(){
   var top=rows.slice().sort(function(a,b){ return b.rs_pct-a.rs_pct; }).slice(0,5);
   var topHtml=top.map(function(r){ return '<button class="band" data-rsq="'+esc(r.ticker)+'"><b>'+esc(r.ticker)+'</b> · RS %ile '+r.rs_pct+' · Rating '+r.rs_rating+'</button>'; }).join('');
   el.innerHTML=
-    '<h2 class="page-title">RS Screener</h2><p class="page-sub">Relative strength screener · S&amp;P 500 + Nasdaq-100 universe ('+rows.length+' stocks, deduplicated) · close '+date+' · benchmark RSP</p>'
+    '<h2 class="page-title">RS Screener</h2><p class="page-sub">Relative strength screener · Liquid US stocks · 30D avg $ volume &gt; $100M · '+(RS_META.preview?'997':rows.length)+' stocks · close '+RS_META.date+' · benchmark RSP</p>'
+    +(RS_META.preview?'<p class="count-note" style="margin-top:2px"><b>Preview sample: top 20 of 997 by 1M return — live site loads the full rs.json</b></p>':'')
     +'<p class="count-note" style="margin-top:2px">Data date <b>'+RS_META.date+'</b> · source: '+RS_META.source+'. RS %ile = percentile of 1M return vs RSP within this universe (0–100). O\'Neil RS Rating = percentile rank (1–99) of weighted quarterly returns: 0.4 × most recent quarter + 0.2 × each of the prior three quarters.</p>'
     +'<div class="band-row" aria-label="Top RS percentile stocks">'+topHtml+'</div>'
     +'<div class="filters" role="group" aria-label="Screener filters">'
@@ -1528,21 +1528,21 @@ function renderRSScreener(){
     +'<div class="fld"><label>&nbsp;</label><span style="display:flex;gap:6px"><button class="tbtn" id="rsReset">Reset filters</button><button class="tbtn active" id="rsExport">Export symbols</button></span></div>'
     +'</div>'
     +'<p class="count-note" id="rsCount"></p><p class="count-note" id="rsCopyNote" style="margin-top:2px"></p>'
-    +'<section class="panel" style="margin-top:8px;padding:10px 12px"><div id="rsTableWrap"></div></section>'
-    +'<p class="foot-note">Click any column header to sort. 9 EMA D/W/M: filled = price above the 9-period EMA on that timeframe, hollow = below. Extension = distance from the 50D SMA. ADR = average daily range. Export symbols copies the currently filtered tickers as a comma-separated list. Data loads from data/rs.json when available; otherwise the embedded 2026-11-20 snapshot is shown.</p>';
+    +'<section class="panel" style="margin-top:8px;padding:10px 12px"><div id="rsTableWrap"></div><div class="rs-pager" id="rsPager" aria-label="Screener pages"></div></section>'
+    +'<p class="foot-note">Click any column header to sort. 9 EMA D/W/M: filled = price above the 9-period EMA on that timeframe, hollow = below. Extension = distance from the 50D SMA. ADR = average daily range. Export symbols copies all currently filtered tickers as a comma-separated list. Data loads from data/rs.json when available; otherwise the embedded preview sample is shown (top 20 of 997 by 1M return, close 2026-11-20).</p>';
   updateRSTable();
   function bind(id, ev, fn){ var n=document.getElementById(id); if(n) n.addEventListener(ev, fn); }
-  bind('rsSearch','input', function(){ RS_STATE.q=this.value; updateRSTable(); });
-  bind('rsIndustry','change', function(){ RS_STATE.industry=this.value; updateRSTable(); });
-  bind('rsMinPctRange','input', function(){ RS_STATE.minPct=parseInt(this.value,10)||0; var n=document.getElementById('rsMinPct'); if(n) n.value=RS_STATE.minPct; var v=document.getElementById('rsMinPctVal'); if(v) v.textContent=RS_STATE.minPct; updateRSTable(); });
-  bind('rsMinPct','input', function(){ RS_STATE.minPct=Math.max(0,Math.min(100,parseInt(this.value,10)||0)); var rg=document.getElementById('rsMinPctRange'); if(rg) rg.value=RS_STATE.minPct; var v=document.getElementById('rsMinPctVal'); if(v) v.textContent=RS_STATE.minPct; updateRSTable(); });
-  bind('rsMinRating','input', function(){ RS_STATE.minRating=parseInt(this.value,10)||0; updateRSTable(); });
-  bind('rsMinAdr','input', function(){ RS_STATE.minAdr=parseFloat(this.value)||0; updateRSTable(); });
-  bind('rsMaxExt','input', function(){ RS_STATE.maxExt=this.value; updateRSTable(); });
-  bind('rsMinVol','input', function(){ RS_STATE.minVol=parseFloat(this.value)||0; updateRSTable(); });
-  bind('rsAbove50','click', function(){ RS_STATE.above50=!RS_STATE.above50; this.classList.toggle('on', RS_STATE.above50); this.setAttribute('aria-pressed', RS_STATE.above50); updateRSTable(); });
-  bind('rsAbove200','click', function(){ RS_STATE.above200=!RS_STATE.above200; this.classList.toggle('on', RS_STATE.above200); this.setAttribute('aria-pressed', RS_STATE.above200); updateRSTable(); });
-  bind('rsReset','click', function(){ RS_STATE={q:'', industry:'all', minPct:0, minRating:0, minAdr:0, maxExt:'', minVol:0, above50:false, above200:false, sortK:'rs_pct', sortDir:-1}; renderRSScreener(); });
+  bind('rsSearch','input', function(){ RS_STATE.q=this.value; RS_STATE.page=1; updateRSTable(); });
+  bind('rsIndustry','change', function(){ RS_STATE.industry=this.value; RS_STATE.page=1; updateRSTable(); });
+  bind('rsMinPctRange','input', function(){ RS_STATE.minPct=parseInt(this.value,10)||0; var n=document.getElementById('rsMinPct'); if(n) n.value=RS_STATE.minPct; var v=document.getElementById('rsMinPctVal'); if(v) v.textContent=RS_STATE.minPct; RS_STATE.page=1; updateRSTable(); });
+  bind('rsMinPct','input', function(){ RS_STATE.minPct=Math.max(0,Math.min(100,parseInt(this.value,10)||0)); var rg=document.getElementById('rsMinPctRange'); if(rg) rg.value=RS_STATE.minPct; var v=document.getElementById('rsMinPctVal'); if(v) v.textContent=RS_STATE.minPct; RS_STATE.page=1; updateRSTable(); });
+  bind('rsMinRating','input', function(){ RS_STATE.minRating=parseInt(this.value,10)||0; RS_STATE.page=1; updateRSTable(); });
+  bind('rsMinAdr','input', function(){ RS_STATE.minAdr=parseFloat(this.value)||0; RS_STATE.page=1; updateRSTable(); });
+  bind('rsMaxExt','input', function(){ RS_STATE.maxExt=this.value; RS_STATE.page=1; updateRSTable(); });
+  bind('rsMinVol','input', function(){ RS_STATE.minVol=parseFloat(this.value)||0; RS_STATE.page=1; updateRSTable(); });
+  bind('rsAbove50','click', function(){ RS_STATE.above50=!RS_STATE.above50; this.classList.toggle('on', RS_STATE.above50); this.setAttribute('aria-pressed', RS_STATE.above50); RS_STATE.page=1; updateRSTable(); });
+  bind('rsAbove200','click', function(){ RS_STATE.above200=!RS_STATE.above200; this.classList.toggle('on', RS_STATE.above200); this.setAttribute('aria-pressed', RS_STATE.above200); RS_STATE.page=1; updateRSTable(); });
+  bind('rsReset','click', function(){ RS_STATE={q:'', industry:'all', minPct:0, minRating:0, minAdr:0, maxExt:'', minVol:0, above50:false, above200:false, sortK:'rs_pct', sortDir:-1, page:1}; renderRSScreener(); });
   bind('rsExport','click', function(){
     var list=this.getAttribute('data-tickers')||'';
     var note=document.getElementById('rsCopyNote');
@@ -1555,7 +1555,7 @@ function renderRSScreener(){
     }
   });
   var qs=el.querySelectorAll('[data-rsq]');
-  for(var i=0;i<qs.length;i++) qs[i].addEventListener('click', function(){ RS_STATE.q=this.getAttribute('data-rsq'); var s=document.getElementById('rsSearch'); if(s) s.value=RS_STATE.q; updateRSTable(); });
+  for(var i=0;i<qs.length;i++) qs[i].addEventListener('click', function(){ RS_STATE.q=this.getAttribute('data-rsq'); RS_STATE.page=1; var s=document.getElementById('rsSearch'); if(s) s.value=RS_STATE.q; updateRSTable(); });
 }
 function applyRS(json){
   if(!json || typeof json!=='object') return;
@@ -1567,15 +1567,22 @@ function applyRS(json){
   var added=false;
   Object.keys(sessions).forEach(function(d){
     if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
-    var s=sessions[d]; if(!s || !Array.isArray(s.rows)) return;
-    var rows=s.rows.map(rsNormRow).filter(function(r){ return r; });
+    var s=sessions[d]; if(!s) return;
+    var raw=null, keys=null;
+    if(Array.isArray(s)) raw=s;
+    else if(Array.isArray(s.rows)){ raw=s.rows; if(Array.isArray(s.keys)) keys=s.keys; }
+    if(!raw) return;
+    var rows=raw.map(function(r){
+      if(Array.isArray(r)){ if(!keys) return null; var o={}; keys.forEach(function(k,i){ o[k]=r[i]; }); return rsNormRow(o); }
+      return rsNormRow(r);
+    }).filter(function(r){ return r; });
     if(rows.length){ RS_BY_DATE[d]=rows; added=true; }
   });
   if(added && curPage==='rs-screener') renderRSScreener();
 }
 function loadRS(){
   if(typeof fetch!=='function') return;
-  fetch('data/rs.json').then(function(r){ if(!r.ok) throw new Error('rs '+r.status); return r.json(); }).then(applyRS).catch(function(){ /* embedded snapshot stays */ });
+  fetch('data/rs.json').then(function(r){ if(!r.ok) throw new Error('rs '+r.status); return r.json(); }).then(applyRS).catch(function(){ /* preview sample stays */ });
 }
 
 var RENDERERS={environment:renderBreadth, leadership:renderLeadership, industries:renderIndustries, positioning:renderPositioning, liquid:renderLiquid, 'rs-screener':renderRSScreener};

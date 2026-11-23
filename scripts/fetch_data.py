@@ -30,8 +30,10 @@ What it covers (6 pages; the Screener page was removed from the site):
     > 1M (21-session means), top 2% by 1M return, with 1M return %,
     extension vs 50D SMA (in 50D ATR multiples), avg $ vol, avg shares
     and ADR %; plus a group-leadership summary by GICS sub-industry.
-  - RS Screener: one row per S&P 500 + Nasdaq-100 constituent for
-    the latest close — 1D/1M/3M/6M returns, RS 1M % vs RSP, RS
+  - RS Screener: one row per stock in the liquid universe (all
+    US-listed common stocks with 30-session mean dollar volume
+    > $100M, re-screened weekly) for the latest close — 1D/1M/3M/6M
+    returns, RS 1M % vs RSP, RS
     percentile (0-100), O'Neil RS Rating (1-99), extension vs 50D
     SMA, ADR %, avg dollar volume, above 50D/200D, off 52W high and
     9D/9W/9M EMA position. Written to data/rs.json (single latest
@@ -127,7 +129,7 @@ WEEKLY_PATH = ROOT / "data" / "industry_weekly.json"
 WEEKS_KEPT = 12  # weekly candles kept per industry ETF
 WEEKLY_MIN_TICKERS = 100  # below this, a run is treated as a failed
 # fetch and the last good industry_weekly.json is left untouched.
-RS_UNIVERSE = "SP500+NDX100"
+RS_UNIVERSE = "LIQUID-ADV100M"
 # RS Rating needs four 63-session quarters (252 sessions back) plus
 # the 6M window (126 sessions); constituents are fetched with 2y of
 # history so both are covered.
@@ -135,6 +137,11 @@ SESSIONS_3M = 63
 SESSIONS_6M = 126
 RS_MIN_ROWS = 100  # below this, a run is treated as a failed fetch
 # and the last good rs.json is left untouched.
+LIQUID_UNIVERSE_PATH = ROOT / "data" / "liquid_universe.json"
+LIQUID_ADV_MIN = 100_000_000  # 30-session mean dollar volume bar
+LIQUID_RESCREEN_DAYS = 7  # re-screen when the stored list is this old
+NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt"
+OTHER_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt"
 
 TAPE = ["SPY", "QQQ", "IWM", "DIA", "RSP", "QQQE", "SPMO", "TLT"]
 INDEX_NAMES = {
@@ -588,6 +595,182 @@ def fetch_constituents() -> tuple[dict, set, set]:
     return out, spx, ndx
 
 
+# ---------------------------------------------------------------- liquid universe
+
+_COMMON_EXCL_RE = re.compile(
+    r"\b(warrants?|rights?|units?|preferred|preference|notes? due|"
+    r"debenture|baby bond|senior notes?|subordinated|trust|etf|etn|"
+    r"exchange[- ]traded( note)?|index fund|fund)\b",
+    re.I)
+
+
+def _is_common_stock(name: str, etf_flag: str, test_flag: str) -> bool:
+    """True for common stocks in a Nasdaq Trader symbol directory row."""
+    if etf_flag == "Y" or test_flag == "Y":
+        return False
+    return not _COMMON_EXCL_RE.search(name or "")
+
+
+def fetch_nasdaq_trader_lists() -> dict:
+    """All US-listed common stocks from the Nasdaq Trader directories.
+
+    Returns {yahoo ticker: security name} for nasdaqlisted.txt
+    (NASDAQ) + otherlisted.txt (NYSE/AMEX/...), excluding ETFs,
+    ETNs, funds, preferreds, warrants, units, rights, test issues
+    and other non-common-share security types. ADS are kept: they
+    are common shares in depositary form. {} on failure — callers
+    must keep the last good universe instead of inventing one.
+    """
+    out: dict[str, str] = {}
+    for url in (NASDAQ_LISTED_URL, OTHER_LISTED_URL):
+        try:
+            raw = _http_get(url, timeout=30).decode("utf-8", "ignore")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Nasdaq Trader list fetch failed ({url}): {exc}", file=sys.stderr)
+            return {}
+        lines = raw.splitlines()
+        if not lines:
+            continue
+        hdr = lines[0].split("|")
+        for ln in lines[1:]:
+            if not ln.strip() or ln.startswith("File Creation Time"):
+                continue
+            parts = ln.split("|")
+            if len(parts) < len(hdr):
+                continue
+            row = dict(zip(hdr, parts))
+            if "Symbol" in row:  # nasdaqlisted.txt
+                sym = row["Symbol"].strip()
+                name = row["Security Name"].strip()
+                etf = row.get("ETF", "N")
+                test = row.get("Test Issue", "N")
+            else:  # otherlisted.txt
+                sym = (row.get("NASDAQ Symbol") or row.get("ACT Symbol", "")).strip()
+                name = row["Security Name"].strip()
+                etf = row.get("ETF", "N")
+                test = row.get("Test Issue", "N")
+            if not sym or not _is_common_stock(name, etf, test):
+                continue
+            out.setdefault(yahoo_ticker(sym), name)
+    if out:
+        print(f"Nasdaq Trader lists: {len(out)} common stocks")
+    return out
+
+
+def screen_liquid_universe(candidates: dict) -> list[str]:
+    """Tickers whose 30-session mean dollar volume exceeds $100M.
+
+    Fetches ~3 months of closes for every candidate and keeps the
+    ones with mean(close x volume) over the last 30 sessions above
+    LIQUID_ADV_MIN. A ticker with fewer than 30 sessions is left
+    out. Returns Yahoo tickers, sorted.
+    """
+    frames = fetch_ohlcv(sorted(candidates), period="3mo")
+    keep: list[str] = []
+    for ticker, frame in frames.items():
+        try:
+            dv = frame["Close"] * frame["Volume"]
+            dv = dv.dropna()
+            if len(dv) < 30:
+                continue
+            if float(dv.iloc[-30:].mean()) > LIQUID_ADV_MIN:
+                keep.append(ticker)
+        except Exception:
+            continue
+    print(f"Liquid screen: {len(keep)} of {len(frames)} fetched pass "
+          f"${LIQUID_ADV_MIN / 1_000_000:.0f}M 30D mean dollar volume")
+    return sorted(keep)
+
+
+def load_liquid_universe() -> dict | None:
+    """Stored liquid universe ({as_of, count, tickers, names}) or None."""
+    if not LIQUID_UNIVERSE_PATH.exists():
+        return None
+    try:
+        data = json.loads(LIQUID_UNIVERSE_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not data.get("tickers"):
+        return None
+    return data
+
+
+def _universe_age_days(universe: dict, close_date: str) -> int | None:
+    try:
+        as_of = date.fromisoformat(universe.get("as_of", ""))
+        close = date.fromisoformat(close_date)
+    except ValueError:
+        return None
+    return (close - as_of).days
+
+
+def refresh_liquid_universe(close_date: str) -> bool:
+    """Full re-screen of the Nasdaq Trader lists; True if refreshed.
+
+    Writes data/liquid_universe.json. On any failure, or when too
+    few tickers pass, the last good file is kept and False returned.
+    """
+    candidates = fetch_nasdaq_trader_lists()
+    if not candidates:
+        print("Liquid re-screen: candidate lists unavailable; keeping last good universe.")
+        return False
+    tickers = screen_liquid_universe(candidates)
+    if len(tickers) < RS_MIN_ROWS:
+        print(f"Liquid re-screen: only {len(tickers)} passers; keeping last good universe.")
+        return False
+    payload = {"as_of": close_date, "count": len(tickers), "tickers": tickers,
+               "names": {t: candidates[t] for t in tickers if t in candidates}}
+    LIQUID_UNIVERSE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LIQUID_UNIVERSE_PATH.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
+    print(f"Liquid universe refreshed: {len(tickers)} tickers (as_of={close_date})")
+    return True
+
+
+def liquid_constituents(universe: dict, constituents: dict,
+                        mid_small: dict | None = None) -> dict:
+    """Constituents dict for compute_rs_rows from the liquid universe.
+
+    Industry comes from the S&P 500 / Nasdaq-100 tables where the
+    ticker is in them, else the S&P 400 / 600 tables, else "Other";
+    the name from the stored universe file.
+    """
+    names = universe.get("names", {}) or {}
+    mid_small = mid_small or {}
+    out: dict[str, tuple[str, str, str]] = {}
+    for ticker in universe.get("tickers", []):
+        industry = constituents.get(ticker, ("", "", ""))[1]
+        if not industry:
+            industry = mid_small.get(ticker, "")
+        industry = industry or "Other"
+        out[ticker] = (industry, industry, names.get(ticker) or ticker)
+    return out
+
+
+SP400_LIST_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"
+SP600_LIST_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_600_companies"
+
+
+def fetch_sp_mid_small_industries() -> dict:
+    """GICS sub-industry by ticker from the S&P 400 / 600 lists.
+
+    Used only to label liquid-universe stocks that are not in the
+    S&P 500 / Nasdaq-100 tables. {} on failure — those rows stay
+    "Other" instead of inventing an industry.
+    """
+    out: dict[str, str] = {}
+    for url in (SP400_LIST_URL, SP600_LIST_URL):
+        try:
+            html = _http_get(url, timeout=30).decode("utf-8", "ignore")
+        except Exception as exc:  # noqa: BLE001
+            print(f"S&P mid/small list fetch failed ({url}): {exc}", file=sys.stderr)
+            continue
+        for sym, _sector, sub, _name in _parse_constituent_table(html):
+            out.setdefault(sym, sub)
+    if out:
+        print(f"S&P 400/600 industries: {len(out)} tickers")
+    return out
+
+
 # ---------------------------------------------------------------- COT
 
 def fetch_cot() -> dict | None:
@@ -1039,8 +1222,7 @@ def _rank_1_99(value: float, population: list[float]) -> int | None:
 
 def compute_rs_rows(const_ohlcv: dict, constituents: dict,
                     bench_frame, close_date: str) -> list[dict]:
-    """One RS Screener row per S&P 500 + Nasdaq-100 constituent for
-    `close_date`.
+    """One RS Screener row per liquid-universe stock for `close_date`.
 
     const_ohlcv: {ticker: OHLCV frame} with ~2y of history (the RS
     Rating needs 252 sessions back). bench_frame is the RSP frame.
@@ -1437,16 +1619,45 @@ def main() -> int:
         print("COT unavailable; carrying forward the last published report.")
 
     # RS Screener (single latest session). Regenerated on every run,
-    # even when history.json gains no new session.
-    if const_ohlcv and constituents and BENCHMARK in etf_ohlcv:
+    # even when history.json gains no new session. Runs over the
+    # liquid universe, re-screened on the Monday run or whenever the
+    # stored list is at least 7 days old; the nightly run never
+    # re-scans the full ~6,000 names.
+    if BENCHMARK in etf_ohlcv:
         rs_close = etf_ohlcv[BENCHMARK].index[-1]
-        rs_rows = compute_rs_rows(const_ohlcv, constituents,
-                                  etf_ohlcv[BENCHMARK], rs_close)
-        if len(rs_rows) >= RS_MIN_ROWS:
-            write_rs_snapshot(rs_rows, rs_close)
+        liquid = load_liquid_universe()
+        age = _universe_age_days(liquid, rs_close) if liquid else None
+        try:
+            is_monday = date.fromisoformat(rs_close).weekday() == 0
+        except ValueError:
+            is_monday = False
+        if liquid is None or is_monday or (age is not None and age >= LIQUID_RESCREEN_DAYS):
+            if refresh_liquid_universe(rs_close):
+                liquid = load_liquid_universe()
+        if liquid:
+            liquid_cons = liquid_constituents(
+                liquid, constituents, fetch_sp_mid_small_industries())
+            print(f"Fetching liquid-universe OHLCV for {len(liquid_cons)} tickers ...")
+            liquid_ohlcv = fetch_ohlcv(sorted(liquid_cons), period="2y")
+            missing = [t for t in liquid_cons if t not in liquid_ohlcv]
+            if missing:
+                print(f"Stooq fallback for {len(missing)} missing liquid tickers ...")
+                for ticker in missing:
+                    got = fetch_stooq(ticker)
+                    if got is not None:
+                        liquid_ohlcv[ticker] = got["frame"]
+            if liquid_ohlcv:
+                rs_rows = compute_rs_rows(liquid_ohlcv, liquid_cons,
+                                          etf_ohlcv[BENCHMARK], rs_close)
+                if len(rs_rows) >= RS_MIN_ROWS:
+                    write_rs_snapshot(rs_rows, rs_close)
+                else:
+                    print(f"RS screener: only {len(rs_rows)} rows for {rs_close}; "
+                          "leaving rs.json unchanged.")
+            else:
+                print("Liquid-universe OHLCV fetch failed; leaving rs.json unchanged.")
         else:
-            print(f"RS screener: only {len(rs_rows)} rows for {rs_close}; "
-                  "leaving rs.json unchanged.")
+            print("No liquid universe available; leaving rs.json unchanged.")
 
     # Industry weekly candles (latest close only). Regenerated on
     # every run, even when history.json gains no new session.
