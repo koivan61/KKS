@@ -32,9 +32,10 @@ if that file cannot be fetched it falls back to its embedded
 | `index.html` | The 7-page site (single file, no build step) |
 | `data/history.json` | Sessions by close date. Sample sessions in this file cover 2026-11-19 to 2026-11-20 (the page's embedded snapshot covers 2026-11-13 to 2026-11-20); the 2026-11-20 close matches the reference (SPY -3.64%, SPX 6,914.4, UNG leader +12.3% vs RSP, Natural gas Crowded Short). |
 | `data/rs.json` | RS Screener snapshot for the latest close only: `{as_of, close_date, universe: "SP500+NDX100", count, rows}`. Initial snapshot is 2026-11-20, 517 rows of the 518-ticker universe (SNDK had no 2026-11-20 bar on Yahoo and is left out). Percentages are to 1 decimal place. |
+| `data/industry_weekly.json` | Weekly OHLC candles for the Industry Group Strength charts, latest close only: `{as_of, weeks: 12, candles: {ticker: [{w, o, h, l, c}]}}`. One bar per ISO week, ending on each week's last trading day, last 12 weeks. Initial snapshot is 2026-11-20, 168 of the 173 ETFs (AMJ, KBWR, GXG, MOON returned 404 from Yahoo and CLIX had only one daily bar left in the window; all left out, never invented). Regenerated on every run from the daily bars already fetched. |
 | `scripts/fetch_data.py` | Fetches daily data and appends new sessions; also regenerates `data/rs.json`. Run it locally or via Actions. |
 | `scripts/requirements.txt` | `yfinance`, `pandas` |
-| `.github/workflows/update-data.yml` | Weekdays at 22:00 UTC: fetch, then commit `data/history.json` and `data/rs.json` if either changed. |
+| `.github/workflows/update-data.yml` | Weekdays at 22:00 UTC: fetch, then commit `data/history.json`, `data/rs.json` and `data/industry_weekly.json` if any changed. |
 | `.nojekyll` | Tells GitHub Pages not to run Jekyll. |
 
 ## Auto-update — what it covers
@@ -48,7 +49,11 @@ sessions; on fetch failure it exits 0 and leaves the last good
   for the 8 tape ETFs, 9 market-segment, 11 equal-weight-sector
   and 11 SPDR-sector ETFs, and all 173 industry ETFs. Computes
   1D, 1M vs RSP, RS 1M %, RS Thrust %, 50D ATR index, Intraday,
-  1M and Off 52W H.
+  1M and Off 52W H — plus 1W % and 1W RS vs RSP (trailing 5
+  sessions). The Industry page also gets weekly candlestick
+  data: `data/industry_weekly.json`, last 12 weekly OHLC bars
+  per industry ETF, derived from the same daily bars (no extra
+  downloads), latest close only.
 - **Breadth**: computed from live S&P 500 constituents
   (Wikipedia list, 518 tickers with Nasdaq-100): Daily ±4%
   up/down, 5D/10D ratio, Quarter ±25%, Month ±25% and ±50%,
@@ -95,12 +100,14 @@ sessions; on fetch failure it exits 0 and leaves the last good
   is the GitHub Actions run after upload. Yahoo Finance has no
   official public API; `yfinance` uses its chart endpoints, so
   a fetch can fail — when it does, the workflow keeps the last
-  good `history.json` / `rs.json`. Note: the initial
+  good `history.json` / `rs.json` / `industry_weekly.json`. Note: the initial
   `data/rs.json` (2026-11-20, 517 rows) was built in the
   sandbox by calling Yahoo's chart endpoint directly with
   urllib, because yfinance's own transport times out there
   and Stooq closes the connection; the fetcher itself still
   uses yfinance + Stooq, which is what the Actions run uses.
+  The initial `data/industry_weekly.json` (2026-11-20, 168
+  ETFs) was built the same way.
 - **RS Screener limits**: a stock with no bar on the close
   date is left out of `rs.json` (e.g. SNDK on 2026-11-20);
   the O'Neil RS Rating is null for stocks with under 252
@@ -121,12 +128,18 @@ sessions; on fetch failure it exits 0 and leaves the last good
 
 ## Definitions used on the page
 
-- `1D` = last session. `1M` = 21 sessions. `3M` = 63 sessions.
-  `6M` = 126 sessions.
+- `1D` = last session. `1M` = 21 sessions. `1W` = trailing
+  5 sessions. `3M` = 63 sessions. `6M` = 126 sessions.
 - Strength benchmark = RSP (equal-weight S&P 500 ETF).
 - RS percentile (`rs_pct`) = percentile rank (0–100) of the
   stock's 1M return inside the S&P 500 + Nasdaq-100 universe;
   `rs_1m_vs_rsp_pct` = stock 1M return minus RSP 1M return.
+  `rs_1w_vs_rsp_pct` is the same over 1W (trailing 5 sessions):
+  stock 5-session return minus RSP 5-session return.
+- Weekly candles (`data/industry_weekly.json`) = one OHLC bar
+  per ISO week for each industry ETF, ending on the week's last
+  trading day, last 12 weeks, latest close only (no history —
+  each run overwrites with the newest 12 weeks).
 - O'Neil RS Rating (`rs_rating`) = percentile rank (1–99) of
   the weighted quarterly return 0.4×Q1 + 0.2×Q2 + 0.2×Q3 +
   0.2×Q4, where each Q is a 63-session return; needs 252

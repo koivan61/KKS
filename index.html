@@ -1,8 +1,16 @@
 <!doctype html>
 <!--
   KKS data file: data/history.json — same folder as this page, fetched on load (relative path).
-  Accepted containers: { "sessions": { "YYYY-MM-DD": {session}, ... } },
+  Primary format (written by scripts/fetch_data.py): { "as_of": "YYYY-MM-DD",
+  "sessions": [ { "close_date": "YYYY-MM-DD", ...session }, ... ] } — close_date is
+  the session date. Also accepted: { "sessions": { "YYYY-MM-DD": {session}, ... } },
   an array of { "date": "YYYY-MM-DD", ...session } objects, or a bare "YYYY-MM-DD" -> session map.
+  The writer's field names (session_pct, rel_1m_rsp_pct, atr_index, rs_vs_rsp, rs_thrust_pct, intraday_pct,
+  ret_1d_pct, ret_1m_pct, ret_1w_pct, rs_1w_vs_rsp, off_52w_high_pct, daily_up/down, ratio_5d/10d, above_40d_pct,
+  large_pct/commercial_pct/small_pct, large_net, ret_1m_pct, avg_dollar_vol, avg_shares,
+  adr_pct, report_date) are mapped to the short names below. NOTE: rs here is the
+  1M return in percentage points vs RSP (rs_vs_rsp), NOT the 0-100 percentile rank
+  (rs_1m_pct) — do not map those two to each other.
   Every field of a session is optional; a section that is missing keeps the embedded snapshot
   for that date, so no panel ever renders blank. A session with only "tape" updates just the tape.
   Session shape, per close date:
@@ -13,7 +21,8 @@
     sectors:     { segments:[row], ew:[row], spdr:[row] }   Market segments / Equal-weight sectors / SPDR sectors
     industries:  [ row x173 ]                 Industry ETFs, same row shape as sectors
       row = { t, name, rs (RS 1M %), thrust (RS Thrust %), atr (50D ATR index),
-              intra (Intraday %), d1 (1D %), m1 (1M %), off (% off 52W high) }   (RS vs RSP bar derives from rs)
+              intra (Intraday %), d1 (1D %), m1 (1M %), w1 (1W %, from ret_1w_pct),
+              rs1w (1W RS vs RSP, from rs_1w_vs_rsp), off (% off 52W high) }   (RS vs RSP bar derives from rs)
     positioning: { report:"YYYY-MM-DD", markets:[ x10 ] }
       market = { etf, name, px, lg, sm, cm (Large specs / Small specs / Commercials percentiles),
                  net (net long/short contracts, signed), wk (weekly change, percentile pts), range5y:[low,high] }
@@ -22,6 +31,11 @@
                    leaders:[ {t, group, ret (1M return %), ext (extension %), vol (avg $ vol, $M),
                               shares (avg shares, M), adr (ADR %)} ] }
   Percentages are plain numbers (e.g. -3.6 means -3.6%) and render to 1 decimal place.
+  data/industry_weekly.json — latest-close only (like data/rs.json), fetched on load:
+  { "as_of": "YYYY-MM-DD", "weeks": 12, "candles": { "UNG": [ {w, o, h, l, c} x12 ], ... } }
+  — weekly OHLC bars per industry ETF, chronological, each bar ending on its week's last
+  trading day. Used by the Industries Charts view; if the file is missing or fails to load,
+  that view falls back to the sparkline cards. Candle data is never invented client-side.
 -->
 <html lang="en">
 <head>
@@ -629,6 +643,7 @@ function renderBreadth(){
 
 // ================= Market Strength / Industry strength =================
 var RSP_M1 = -3.4; // RSP absolute 1M return at the 2026-11-20 close; RS values are relative to it
+var RSP_W1 = -1.3; // RSP absolute 1W (trailing 5 sessions) return at the 2026-11-20 close; 1W RS values are relative to it
 function mkStrength(t, name, rs, d1, seedKey, atrBase, offBase){
   var r=seedRand('str'+seedKey+t);
   return {t:t, name:name, rs:rs, d1:d1,
@@ -640,7 +655,9 @@ function mkStrength(t, name, rs, d1, seedKey, atrBase, offBase){
 function scaledRow(row){
   var sc=dScale(), out={};
   for(var k in row) out[k]=row[k];
-  if(curDate()!=='2026-11-20'){ out.rs=+(row.rs*sc).toFixed(1); out.d1=+(row.d1*(0.35+0.4*sc)).toFixed(2); out.thrust=Math.max(4,Math.round(row.thrust*(0.7+0.3*sc))); out.intra=+(row.intra*sc).toFixed(2); }
+  if(row.w1==null){ var wr=seedRand('w1'+row.t); out.w1=+(row.d1*1.7 + row.rs*0.22 + (wr()-0.5)*3.4).toFixed(2); }
+  if(curDate()!=='2026-11-20'){ out.rs=+(row.rs*sc).toFixed(1); out.d1=+(row.d1*(0.35+0.4*sc)).toFixed(2); out.thrust=Math.max(4,Math.round(row.thrust*(0.7+0.3*sc))); out.intra=+(row.intra*sc).toFixed(2); out.w1=+(out.w1*(0.35+0.4*sc)).toFixed(2); }
+  if(row.rs1w==null) out.rs1w=+(out.w1 - RSP_W1*(curDate()==='2026-11-20'?1:sc)).toFixed(1);
   out.m1=+(out.rs + RSP_M1*(curDate()==='2026-11-20'?1:sc)).toFixed(1);
   return out;
 }
@@ -745,23 +762,41 @@ var STR_COLS=[
   {k:'m1', label:'1M'},
   {k:'off', label:'Off 52W H', opt:1}
 ];
+// Industries page only: 1W PRICE / 1W RS sparklines replace the 1M ones, no Intraday
+// column, and the % change columns are 1D and 1W (no numeric 1M). The spark columns
+// share their sort key with the underlying value, so header clicks sort by 1W / 1W RS.
+var IND_COLS=[
+  {k:'t', label:'ETF / MARKET', left:1},
+  {k:'rs', label:'RS 1M %'},
+  {k:'thrust', label:'RS Thrust %'},
+  {k:'w1', label:'1W PRICE', spark:'w1', opt:1},
+  {k:'rs1w', label:'1W RS', spark:'rs1w', opt:1},
+  {k:'atr', label:'50D ATR index'},
+  {k:'rsbar', label:'RS vs RSP'},
+  {k:'d1', label:'1D'},
+  {k:'w1n', label:'1W', val:'w1'},
+  {k:'off', label:'Off 52W H', opt:1}
+];
 function rsBar(v){
   var w=Math.min(48, Math.abs(v)*3.2), left = v>=0 ? 50 : 50-w/96*100;
   var col = v>=0 ? 'rgb(117,117,117)' : 'rgb(0,0,0)';
   return '<span style="display:inline-block;position:relative;width:96px;height:8px;background:#9e9e9e;border-radius:99px;vertical-align:middle"><span style="position:absolute;top:0;height:100%;left:'+(v>=0?50:left)+'%;width:'+(w/96*100)+'%;background:'+col+';border-radius:99px"></span><span style="position:absolute;left:50%;top:-2px;width:1px;height:12px;background:#3d3d3d"></span></span>';
 }
-function strengthTableHTML(secId, rows){
+function strengthTableHTML(secId, rows, cols){
+  cols = cols || STR_COLS;
   var st=strSort[secId] || {k:'rs', dir:-1};
   var sorted=rows.slice();
   if(st.k && st.k!=='rsbar'){
-    sorted.sort(function(a,b){ var x=a[st.k], y=b[st.k]; if(typeof x==='string'){ x=x.toLowerCase(); y=String(y).toLowerCase(); } return (x<y?-1:x>y?1:0)*st.dir; });
+    var sk=st.k;
+    cols.forEach(function(c){ if(c.k===sk && c.val) sk=c.val; });
+    sorted.sort(function(a,b){ var x=a[sk], y=b[sk]; if(typeof x==='string'){ x=x.toLowerCase(); y=String(y).toLowerCase(); } return (x<y?-1:x>y?1:0)*st.dir; });
   }
-  var head=STR_COLS.map(function(c){
+  var head=cols.map(function(c){
     var arr = (st.k===c.k) ? '<span class="arr">'+(st.dir<0?'▼':'▲')+'</span>' : '';
     return '<th data-sk="'+c.k+'"'+(c.opt?' class="opt"':'')+(c.left?' style="text-align:left"':'')+'>'+c.label+arr+'</th>';
   }).join('');
   var body=sorted.map(function(r){
-    var cells=STR_COLS.map(function(c){
+    var cells=cols.map(function(c){
       var v;
       if(c.spark) v=spark2(r.t+curDate()+c.k, r[c.spark], 'mini', 86, 26);
       else if(c.k==='t') v='<span style="font-weight:700">'+r.t+'</span> <span style="color:var(--muted);font-weight:400">'+esc(r.name)+'</span>';
@@ -771,6 +806,7 @@ function strengthTableHTML(secId, rows){
       else if(c.k==='atr') v=r.atr.toFixed(2);
       else if(c.k==='d1') v='<b class="'+cls(r.d1)+'">'+fmt(r.d1)+'</b>';
       else if(c.k==='m1') v='<b class="'+cls(r.m1)+'">'+fmt(r.m1)+'</b>';
+      else if(c.val) v='<b class="'+cls(r[c.val])+'">'+fmt(r[c.val])+'</b>';
       else if(c.k==='off') v='<span class="neg">'+r.off+'%</span>';
       else v=r[c.k];
       return '<td'+(c.opt?' class="opt"':'')+(c.left?' style="text-align:left"':'')+'>'+v+'</td>';
@@ -784,6 +820,36 @@ function strengthChartsHTML(rows){
     return '<article class="chart-card"><div class="ct"><span><b>'+r.t+'</b> <span class="muted" style="font-size:11.5px">'+esc(r.name)+'</span></span><b class="'+cls(r.rs)+'">'+fmt(r.rs)+'</b></div>'
       + spark2(r.t+curDate()+'big', r.rs, 'mini-lg', 150, 44)
       + '<div class="kv"><span>1D</span><b class="'+cls(r.d1)+'">'+fmt(r.d1)+'</b></div><div class="kv"><span>Thrust</span><b>'+r.thrust+'%</b></div></article>';
+  }).join('')+'</div>';
+}
+// Weekly candlesticks for the Industries Charts view. Bars come only from
+// data/industry_weekly.json (IND_WEEKLY); when that file has not loaded, the
+// view falls back to the sparkline cards above — candle data is never invented.
+function candleSVG(bars, w, h){
+  var min=Infinity, max=-Infinity, i, b;
+  for(i=0;i<bars.length;i++){ b=bars[i]; if(b.l<min) min=b.l; if(b.h>max) max=b.h; }
+  if(!(max>min)) max=min+1;
+  var pad=(max-min)*0.06; min-=pad; max+=pad;
+  var slot=w/bars.length, bw=Math.max(2, Math.floor(slot*0.62));
+  function Y(v){ return ((max-v)/(max-min)*h).toFixed(1); }
+  var out='';
+  for(i=0;i<bars.length;i++){
+    b=bars[i];
+    var cx=slot*i+slot/2, col=(b.c>=b.o)?'rgb(117,117,117)':'rgb(0,0,0)';
+    var yO=Y(b.o), yC=Y(b.c), top=Math.min(yO,yC), bh=Math.max(1, Math.abs(yC-yO));
+    out+='<line x1="'+cx.toFixed(1)+'" y1="'+Y(b.h)+'" x2="'+cx.toFixed(1)+'" y2="'+Y(b.l)+'" stroke="'+col+'" stroke-width="1"/>'
+      +'<rect x="'+(cx-bw/2).toFixed(1)+'" y="'+top+'" width="'+bw+'" height="'+bh.toFixed(1)+'" fill="'+col+'"/>';
+  }
+  return '<svg viewBox="0 0 '+w+' '+h+'" width="'+w+'" height="'+h+'" role="img" aria-label="Weekly candlestick chart" style="display:block">'+out+'</svg>';
+}
+function indChartsHTML(rows){
+  if(!IND_WEEKLY || !IND_WEEKLY.candles) return strengthChartsHTML(rows);
+  return '<div class="chart-grid">'+rows.map(function(r){
+    var bars=IND_WEEKLY.candles[r.t];
+    var chart=(bars && bars.length) ? candleSVG(bars, 150, 56) : spark2(r.t+curDate()+'big', r.rs, 'mini-lg', 150, 44);
+    return '<article class="chart-card"><div class="ct"><span><b>'+r.t+'</b> <span class="muted" style="font-size:11.5px">'+esc(r.name)+'</span></span><b class="'+cls(r.rs)+'">'+fmt(r.rs)+'</b></div>'
+      + chart
+      + '<div class="kv"><span>1W</span><b class="'+cls(r.w1)+'">'+fmt(r.w1)+'</b></div><div class="kv"><span>Thrust</span><b>'+r.thrust+'%</b></div></article>';
   }).join('')+'</div>';
 }
 function bindStrengthTables(el, rerender){
@@ -847,8 +913,9 @@ function renderIndustries(){
   el.innerHTML=
     '<h2 class="page-title">Industry Group Strength</h2><p class="page-sub">'+scaled.length+' industry &amp; thematic ETFs ranked by 1M relative strength vs RSP · close '+date+'</p>'
     +'<div class="toolbar"><span class="count-note" style="margin:0">Strongest <b>'+top.t+' · '+esc(top.name)+' <span class="pos">'+fmt(top.rs)+'</span></b> &nbsp;·&nbsp; Weakest <b>'+bot.t+' · '+esc(bot.name)+' <span class="neg">'+fmt(bot.rs)+'</span></b></span><span style="margin-left:auto">'+segToggleHTML('industries')+'</span></div>'
-    +'<section class="panel" style="margin-top:10px">'+(view==='table' ? strengthTableHTML('ind', scaled) : strengthChartsHTML(scaled))+'</section>'
-    +'<p class="foot-note">Click any column header to sort. RS = relative strength vs RSP over the trailing 21 sessions. Prices via Stooq / Yahoo Finance; charts reference TradingView. Data loads from data/history.json when available; otherwise the embedded snapshot is shown.</p>';
+    +'<section class="panel" style="margin-top:10px">'+(view==='table' ? strengthTableHTML('ind', scaled, IND_COLS) : indChartsHTML(scaled))+'</section>'
+    +(view==='charts' && IND_WEEKLY && IND_WEEKLY.as_of && IND_WEEKLY.as_of!==date ? '<p class="count-note" style="margin-top:8px">Weekly candles as of latest close ('+esc(IND_WEEKLY.as_of)+').</p>' : '')
+    +'<p class="foot-note">Click any column header to sort. RS = relative strength vs RSP over the trailing 21 sessions (1M = trailing 21 sessions); 1W = trailing 5 sessions. Prices via Stooq / Yahoo Finance; charts reference TradingView. Data loads from data/history.json when available, weekly candles from data/industry_weekly.json; otherwise the embedded snapshot is shown.</p>';
   bindSeg(el,'industries',renderIndustries);
   bindStrengthTables(el,renderIndustries);
 }
@@ -892,7 +959,12 @@ function renderPositioning(){
     var st=posStatus(lg);
     function row(label, val, col){ return '<div class="cot-row"><span>'+label+'</span><span class="cot-track"><span class="cot-marker" style="left:'+Math.max(1,Math.min(99,val))+'%;background:'+col+'"></span></span><span class="cot-val" style="color:'+col+'">'+val+'</span></div>'; }
     var net=p.net, rangeLo=p.range5y?p.range5y[0]:-Math.abs(net)*1.9, rangeHi=p.range5y?p.range5y[1]:Math.abs(net)*1.9, rangeMax=Math.max(Math.abs(rangeLo),Math.abs(rangeHi))||1, rangePos=Math.max(2,Math.min(98, 50 + net/rangeMax*50));
-    return '<article class="pos2-card"><div class="prow"><span><span class="sym">'+p.etf+'</span> <span class="pname">'+p.name+'</span></span><span class="pprice">'+p.px.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+'</span></div>'
+    // fetch_data.py writes no ETF price for COT markets, so a live session's px is 0:
+    // fall back to the embedded snapshot price for the same ETF instead of showing 0.00.
+    var pxv=p.px, pi;
+    if(!pxv){ for(pi=0;pi<POS_DATA.length;pi++){ if(POS_DATA[pi].etf===p.etf){ pxv=POS_DATA[pi].px; break; } } }
+    if(!pxv) pxv=0;
+    return '<article class="pos2-card"><div class="prow"><span><span class="sym">'+p.etf+'</span> <span class="pname">'+p.name+'</span></span><span class="pprice">'+pxv.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+'</span></div>'
       +'<div style="margin-top:6px"><span class="status-tag '+st[1]+'">'+st[0]+'</span> <span class="muted" style="font-size:11.5px">'+POS_WINDOW+' percentile · large specs</span></div>'
       +'<div style="margin-top:8px">'+row('Large specs', lg, '#0f7d94')+row('Small specs', sm, '#9a6206')+row('Commercials', cm, '#b02ec4')+'</div>'
       +'<div class="kv"><span>COT report</span><b>'+report+'</b></div>'
@@ -981,13 +1053,13 @@ function hSess(){ return HIST[curDate()] || null; }
 function hNum(v, dflt){ var n=(typeof v==='string')?parseFloat(v.replace(/,/g,'')):v; return (typeof n==='number' && isFinite(n)) ? n : (dflt===undefined?0:dflt); }
 function hPair(v){ if(!v) return null; if(Array.isArray(v)) return [hNum(v[0]), hNum(v[1])]; return [hNum(v.up!=null?v.up:v.u), hNum(v.down!=null?v.down:v.d)]; }
 function hStrengthRow(r){
-  if(Array.isArray(r)) return {t:r[0], name:r[1]||'', rs:hNum(r[2]), thrust:Math.round(hNum(r[3],80)), atr:hNum(r[4],1), intra:hNum(r[5]), d1:hNum(r[6]), m1:(r[7]==null?null:hNum(r[7])), off:hNum(r[8],-5)};
-  return {t:r.t||r.ticker||r.symbol||'', name:r.name||'', rs:hNum(r.rs!=null?r.rs:(r.rs1m!=null?r.rs1m:r.m)), thrust:Math.round(hNum(r.thrust,80)), atr:hNum(r.atr,1), intra:hNum(r.intra!=null?r.intra:r.intraday), d1:hNum(r.d1!=null?r.d1:r.d), m1:(r.m1==null?null:hNum(r.m1)), off:hNum(r.off,-5)};
+  if(Array.isArray(r)) return {t:r[0], name:r[1]||'', rs:hNum(r[2]), thrust:Math.round(hNum(r[3],80)), atr:hNum(r[4],1), intra:hNum(r[5]), d1:hNum(r[6]), m1:(r[7]==null?null:hNum(r[7])), off:hNum(r[8],-5), w1:(r[9]==null?null:hNum(r[9])), rs1w:(r[10]==null?null:hNum(r[10]))};
+  return {t:r.t||r.ticker||r.symbol||'', name:r.name||'', rs:hNum(r.rs!=null?r.rs:(r.rs1m!=null?r.rs1m:(r.rs_vs_rsp!=null?r.rs_vs_rsp:r.m))), thrust:Math.round(hNum(r.thrust!=null?r.thrust:r.rs_thrust_pct,80)), atr:hNum(r.atr!=null?r.atr:r.atr_index,1), intra:hNum(r.intra!=null?r.intra:(r.intraday!=null?r.intraday:r.intraday_pct)), d1:hNum(r.d1!=null?r.d1:(r.d!=null?r.d:r.ret_1d_pct)), m1:(r.m1!=null?hNum(r.m1):(r.ret_1m_pct==null?null:hNum(r.ret_1m_pct))), off:hNum(r.off!=null?r.off:r.off_52w_high_pct,-5), w1:(r.w1!=null?hNum(r.w1):(r.ret_1w_pct==null?null:hNum(r.ret_1w_pct))), rs1w:(r.rs1w!=null?hNum(r.rs1w):(r.rs_1w_vs_rsp==null?null:hNum(r.rs_1w_vs_rsp)))};
 }
-function histStrengthRow(r){ var o={}; for(var k in r) o[k]=r[k]; if(o.m1==null) o.m1=+(o.rs + RSP_M1).toFixed(1); return o; }
+function histStrengthRow(r){ var o={}; for(var k in r) o[k]=r[k]; if(o.m1==null) o.m1=+(o.rs + RSP_M1).toFixed(1); if(o.w1==null){ var wr=seedRand('w1'+o.t); o.w1=+(o.d1*1.7 + o.rs*0.22 + (wr()-0.5)*3.4).toFixed(2); } if(o.rs1w==null) o.rs1w=+(o.w1 - RSP_W1).toFixed(1); return o; }
 function hTapeRow(x){
   if(Array.isArray(x)) return {t:x[0], close:(x[1]==null?null:hNum(x[1])), d:hNum(x[2]), m:hNum(x[3]), atr:(x[4]==null?null:hNum(x[4]))};
-  return {t:x.t||x.ticker||x.symbol||'', close:(x.close!=null?hNum(x.close):(x.price!=null?hNum(x.price):(x.px!=null?hNum(x.px):null))), d:hNum(x.d!=null?x.d:(x.d1!=null?x.d1:x.pct)), m:hNum(x.m!=null?x.m:(x.m1!=null?x.m1:x.rs)), atr:(x.atr==null?null:hNum(x.atr))};
+  return {t:x.t||x.ticker||x.symbol||'', close:(x.close!=null?hNum(x.close):(x.price!=null?hNum(x.price):(x.px!=null?hNum(x.px):null))), d:hNum(x.d!=null?x.d:(x.d1!=null?x.d1:(x.session_pct!=null?x.session_pct:x.pct))), m:hNum(x.m!=null?x.m:(x.m1!=null?x.m1:(x.rel_1m_rsp_pct!=null?x.rel_1m_rsp_pct:x.rs))), atr:(x.atr!=null?hNum(x.atr):(x.atr_index==null?null:hNum(x.atr_index)))};
 }
 function normalizeSession(s){
   if(!s || typeof s!=='object') return null;
@@ -995,10 +1067,21 @@ function normalizeSession(s){
   if(Array.isArray(s.tape) && s.tape.length) ns.tape=s.tape.map(hTapeRow).filter(function(x){ return x.t; });
   var b=s.breadth;
   if(b && typeof b==='object'){
-    ns.breadth={ daily:hPair(b.daily||b.daily4), r5:(b.r5!=null?hNum(b.r5):(b.ratio5!=null?hNum(b.ratio5):null)), r10:(b.r10!=null?hNum(b.r10):(b.ratio10!=null?hNum(b.ratio10):null)),
-      quarter:hPair(b.quarter||b.q25), month25:hPair(b.month25||b.m25), month50:hPair(b.month50||b.m50), d34:hPair(b.d34||b.s34||b.days34),
-      above:(b.above==null?null:hNum(b.above)), aboveD:(b.aboveD!=null?String(b.aboveD):null),
-      spx:(b.spx==null?null:b.spx), spxPct:(b.spxPct!=null?hNum(b.spxPct):(b.pct!=null?hNum(b.pct):(b.d1!=null?hNum(b.d1):null))) };
+    ns.breadth={ daily:hPair(b.daily||b.daily4||((b.daily_up!=null||b.daily_down!=null)?[b.daily_up,b.daily_down]:null)), r5:(b.r5!=null?hNum(b.r5):(b.ratio5!=null?hNum(b.ratio5):(b.ratio_5d!=null?hNum(b.ratio_5d):null))), r10:(b.r10!=null?hNum(b.r10):(b.ratio10!=null?hNum(b.ratio10):(b.ratio_10d!=null?hNum(b.ratio_10d):null))),
+      quarter:hPair(b.quarter||b.q25||((b.quarter_up!=null||b.quarter_down!=null)?[b.quarter_up,b.quarter_down]:null)), month25:hPair(b.month25||b.m25||((b.month25_up!=null||b.month25_down!=null)?[b.month25_up,b.month25_down]:null)), month50:hPair(b.month50||b.m50||((b.month50_up!=null||b.month50_down!=null)?[b.month50_up,b.month50_down]:null)), d34:hPair(b.d34||b.s34||b.days34||((b.d34_up!=null||b.d34_down!=null)?[b.d34_up,b.d34_down]:null)),
+      above:(b.above!=null?hNum(b.above):(b.above_40d_pct==null?null:hNum(b.above_40d_pct))), aboveD:(b.aboveD!=null?String(b.aboveD):null),
+      spx:(b.spx!=null?b.spx:(b.spx_close==null?null:b.spx_close)), spxPct:(b.spxPct!=null?hNum(b.spxPct):(b.pct!=null?hNum(b.pct):(b.d1!=null?hNum(b.d1):(b.spx_session_pct!=null?hNum(b.spx_session_pct):null)))) };
+  }
+  // fetch_data.py also writes SPX and daily breadth at the session top level
+  // (spx_close, spx_session_pct, breadth_up/down); use them when the breadth
+  // dict is missing or lacks them, so a tape-only session still updates SPX.
+  if(!ns.breadth && (s.spx_close!=null || s.spx_session_pct!=null || s.breadth_up!=null || s.breadth_down!=null)){
+    ns.breadth={ daily:null, r5:null, r10:null, quarter:null, month25:null, month50:null, d34:null, above:null, aboveD:null, spx:null, spxPct:null };
+  }
+  if(ns.breadth){
+    if(!ns.breadth.daily && (s.breadth_up!=null || s.breadth_down!=null)) ns.breadth.daily=[hNum(s.breadth_up), hNum(s.breadth_down)];
+    if(ns.breadth.spx==null && s.spx_close!=null) ns.breadth.spx=s.spx_close;
+    if(ns.breadth.spxPct==null && s.spx_session_pct!=null) ns.breadth.spxPct=hNum(s.spx_session_pct);
   }
   var sec=s.sectors||{};
   var seg=sec.segments||sec.marketSegments||s.segments, ew=sec.ew||sec.equalWeight||sec.equal_weight||s.ew, spd=sec.spdr||s.spdr;
@@ -1008,13 +1091,13 @@ function normalizeSession(s){
   if(Array.isArray(s.industries)&&s.industries.length) ns.industries=s.industries.map(hStrengthRow);
   var pos=s.positioning, markets=Array.isArray(pos)?pos:(pos&&pos.markets);
   if(Array.isArray(markets)&&markets.length){
-    ns.posReport=(pos&&pos.report)||s.cotReport||null;
+    ns.posReport=(pos&&pos.report)||(pos&&pos.report_date)||s.cotReport||null;
     ns.positioning=markets.map(function(p){
       if(Array.isArray(p)) return {etf:p[0], name:p[1]||'', px:hNum(p[2]), lg:hNum(p[3],50), cm:hNum(p[5],50), sm:hNum(p[4],50), net:hNum(p[6]), wk:hNum(p[7]), range5y:null};
       var rg=p.range5y||p.range;
       return {etf:p.etf||p.t||p.symbol||'', name:p.name||'', px:hNum(p.px!=null?p.px:(p.price!=null?p.price:p.close)),
-        lg:hNum(p.lg!=null?p.lg:(p.large!=null?p.large:p.largeSpecs),50), cm:hNum(p.cm!=null?p.cm:(p.commercials!=null?p.commercials:p.com),50), sm:hNum(p.sm!=null?p.sm:(p.small!=null?p.small:p.smallSpecs),50),
-        net:hNum(p.net), wk:hNum(p.wk!=null?p.wk:(p.weeklyChange!=null?p.weeklyChange:p.chg)), range5y:(Array.isArray(rg)?[hNum(rg[0]),hNum(rg[1])]:null)};
+        lg:hNum(p.lg!=null?p.lg:(p.large!=null?p.large:(p.largeSpecs!=null?p.largeSpecs:p.large_pct)),50), cm:hNum(p.cm!=null?p.cm:(p.commercials!=null?p.commercials:(p.com!=null?p.com:p.commercial_pct)),50), sm:hNum(p.sm!=null?p.sm:(p.small!=null?p.small:(p.smallSpecs!=null?p.smallSpecs:p.small_pct)),50),
+        net:hNum(p.net!=null?p.net:p.large_net), wk:hNum(p.wk!=null?p.wk:(p.weeklyChange!=null?p.weeklyChange:p.chg)), range5y:(Array.isArray(rg)?[hNum(rg[0]),hNum(rg[1])]:null)};
     }).filter(function(p){ return p.etf; });
     if(!ns.positioning.length) delete ns.positioning;
   }
@@ -1023,11 +1106,11 @@ function normalizeSession(s){
     var L={period:lq.period||'1M', groups:[], leaders:[]};
     if(Array.isArray(lq.groups)) L.groups=lq.groups.map(function(g){
       if(Array.isArray(g)) return [g[0], hNum(g[1]), hNum(g[2]), hNum(g[3])];
-      return [g.name||g.group||'', hNum(g.stocks!=null?g.stocks:g.count), hNum(g.leaders!=null?g.leaders:g.n), hNum(g.avg!=null?g.avg:g.avgRet)];
+      return [g.name||g.group||g.industry||'', hNum(g.stocks!=null?g.stocks:(g.count!=null?g.count:g.liquid_stocks)), hNum(g.leaders!=null?g.leaders:g.n), hNum(g.avg!=null?g.avg:(g.avgRet!=null?g.avgRet:g.median_ret_1m_pct))];
     }).filter(function(g){ return g[0]; });
     if(Array.isArray(lq.leaders)) L.leaders=lq.leaders.map(function(x){
       if(Array.isArray(x)) return [x[0], x[1]||'', hNum(x[2]), hNum(x[3]), hNum(x[4]), hNum(x[5]), hNum(x[6])];
-      return [x.t||x.ticker||x.symbol||'', x.group||x.industry||x.theme||'', hNum(x.ret!=null?x.ret:(x.r1m!=null?x.r1m:x.m1)), hNum(x.ext!=null?x.ext:x.extension), hNum(x.vol!=null?x.vol:(x.dvol!=null?x.dvol:x.avgVol)), hNum(x.shares!=null?x.shares:x.avgShares), hNum(x.adr)];
+      return [x.t||x.ticker||x.symbol||'', x.group||x.industry||x.theme||'', hNum(x.ret!=null?x.ret:(x.r1m!=null?x.r1m:(x.m1!=null?x.m1:x.ret_1m_pct))), hNum(x.ext!=null?x.ext:x.extension), hNum(x.vol!=null?x.vol:(x.dvol!=null?x.dvol:(x.avgVol!=null?x.avgVol:(x.avg_dollar_vol!=null?Math.round(x.avg_dollar_vol/1e6):undefined)))), hNum(x.shares!=null?x.shares:(x.avgShares!=null?x.avgShares:(x.avg_shares!=null?+(x.avg_shares/1e6).toFixed(1):undefined))), hNum(x.adr!=null?x.adr:x.adr_pct)];
     }).filter(function(x){ return x[0]; });
     if(L.groups.length||L.leaders.length) ns.liquid=L;
   }
@@ -1103,7 +1186,9 @@ function mergeBreadthHist(date, ns){
 function applyHistory(json){
   var sessions=null;
   if(!json || typeof json!=='object') return;
-  if(Array.isArray(json)){ sessions={}; json.forEach(function(s){ if(s && s.date) sessions[s.date]=s; }); }
+  function toMap(list){ var m={}; list.forEach(function(s){ var k=s && (s.close_date||s.date); if(k) m[k]=s; }); return m; }
+  if(Array.isArray(json)) sessions=toMap(json);
+  else if(Array.isArray(json.sessions)) sessions=toMap(json.sessions);
   else if(json.sessions && typeof json.sessions==='object') sessions=json.sessions;
   else sessions=json;
   var dates=Object.keys(sessions).filter(function(d){ return /^\d{4}-\d{2}-\d{2}$/.test(d); }).sort();
@@ -1117,8 +1202,27 @@ function applyHistory(json){
       DATES.push(date); DATES.sort(); changed=true;
       if(!WEEKDAY[date]){ var wd=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date(date+'T12:00:00Z').getUTCDay()]; WEEKDAY[date]=wd+' session'; }
     }
-    mergeBreadthHist(date, ns);
-    applyToSnap(date, ns);
+  });
+  // Weekly change in COT percentiles (pts): fetch_data.py writes the levels
+  // (large_pct etc.) but no week-over-week change, so derive it here from
+  // the previous session that has the same market. On days with no new COT
+  // release the levels are carried forward unchanged, so the change is 0.
+  dates.forEach(function(date, di){
+    if(di===0 || !HIST[date] || !HIST[date].positioning) return;
+    var prev=HIST[dates[di-1]];
+    if(!prev || !prev.positioning) return;
+    HIST[date].positioning.forEach(function(p){
+      var q=null, i;
+      for(i=0;i<prev.positioning.length;i++){ if(prev.positioning[i].etf===p.etf){ q=prev.positioning[i]; break; } }
+      if(q) p.wk=+(p.lg-q.lg).toFixed(1);
+    });
+  });
+  // Merge into the snapshot only after wk is derived, so the Debrief
+  // positioning notes carry the derived weekly change too.
+  dates.forEach(function(date){
+    if(!HIST[date]) return;
+    mergeBreadthHist(date, HIST[date]);
+    applyToSnap(date, HIST[date]);
   });
   if(!Object.keys(HIST).length) return;
   var di=document.getElementById('dateInput');
@@ -1129,6 +1233,34 @@ function applyHistory(json){
 function loadHistory(){
   if(typeof fetch!=='function') return;
   fetch('data/history.json').then(function(r){ if(!r.ok) throw new Error('history '+r.status); return r.json(); }).then(applyHistory).catch(function(){ /* embedded snapshot stays */ });
+}
+
+// ================= data/industry_weekly.json (Industries Charts view) =================
+// Latest-close only, like data/rs.json: { as_of, weeks, candles: { TICKER: [{w,o,h,l,c}...] } }.
+// Loaded the same way as history.json / rs.json. If it is missing or fails to load,
+// IND_WEEKLY stays null and the Industries Charts view falls back to sparkline cards.
+var IND_WEEKLY=null;
+function applyIndWeekly(json){
+  if(!json || typeof json!=='object' || !json.candles || typeof json.candles!=='object') return;
+  var candles={};
+  Object.keys(json.candles).forEach(function(t){
+    var bars=json.candles[t];
+    if(!Array.isArray(bars)) return;
+    var clean=bars.map(function(b){
+      if(!b || typeof b!=='object') return null;
+      var o=hNum(b.o, NaN), h=hNum(b.h, NaN), l=hNum(b.l, NaN), c=hNum(b.c, NaN);
+      if(!isFinite(o)||!isFinite(h)||!isFinite(l)||!isFinite(c)) return null;
+      return {w:b.w||'', o:o, h:h, l:l, c:c};
+    }).filter(function(b){ return b; });
+    if(clean.length) candles[t]=clean;
+  });
+  if(!Object.keys(candles).length) return;
+  IND_WEEKLY={as_of:(typeof json.as_of==='string'?json.as_of:null), weeks:json.weeks||12, candles:candles};
+  if(curPage==='industries') renderIndustries();
+}
+function loadIndWeekly(){
+  if(typeof fetch!=='function') return;
+  fetch('data/industry_weekly.json').then(function(r){ if(!r.ok) throw new Error('industry_weekly '+r.status); return r.json(); }).then(applyIndWeekly).catch(function(){ /* sparkline cards stay */ });
 }
 
 // ================= RS Screener =================
@@ -1383,6 +1515,7 @@ var RENDERERS={environment:renderBreadth, leadership:renderLeadership, industrie
 route();
 loadHistory();
 loadRS();
+loadIndWeekly();
 
 </script>
 </body>

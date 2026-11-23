@@ -10,9 +10,12 @@ What it covers (6 pages; the Screener page was removed from the site):
     Month +-25%, Month +-50%, 34-session +-13%, Above-40D %, SPX close.
   - Market Strength: 8 index cards + Market segments (9), Equal-weight
     sectors (11) and SPDR sectors (11) — RS 1M %, RS Thrust %, 50D ATR
-    index, RS vs RSP, Intraday, 1D, 1M, Off-52W-High.
+    index, RS vs RSP, Intraday, 1D, 1M, Off-52W-High; plus 1W % and
+    1W RS vs RSP (trailing 5 sessions).
   - Industry Group Strength: all 173 industry/thematic ETFs in IND_LIST,
-    same columns as Market Strength.
+    same columns as Market Strength. Weekly OHLC candles for the same
+    173 ETFs (last 12 weeks, derived from the daily bars already
+    fetched in the run) are written to data/industry_weekly.json.
   - Positioning: 10 COT markets from the CFTC legacy futures-only file
     (deafut.txt). Large specs = Noncommercial, Commercials = Commercial,
     Small specs = Nonreportable. Percentiles are the rank of each
@@ -49,7 +52,8 @@ Sources (all free / public):
     -93,966, Natural gas net -262,984).
 
 Definitions:
-  - 1D = last session. 1M = 21 sessions. Strength benchmark = RSP.
+  - 1D = last session. 1M = 21 sessions. 1W = trailing 5 sessions.
+    Strength benchmark = RSP.
   - RS 1M % = percentile rank (0-100) of the ETF's 1M return inside
     its own universe (Market Strength rows rank inside their group;
     Industry rows rank inside all 173).
@@ -76,7 +80,10 @@ Behaviour (unchanged from the original script):
     could not be fetched are null in the new session — never invented.
     The same applies to data/rs.json: if the RS rows cannot be
     computed (or cover fewer than RS_MIN_ROWS tickers), the last
-    good rs.json is left untouched.
+    good rs.json is left untouched. The same rule applies to
+    data/industry_weekly.json: if fewer than WEEKLY_MIN_TICKERS
+    ETFs have a full 12 weeks of weekly bars, the last good file
+    is left untouched.
 
 Usage:
     pip install -r scripts/requirements.txt
@@ -86,6 +93,10 @@ Output:
     data/history.json  — { "as_of": "YYYY-MM-DD", "sessions": [...] }
     data/rs.json       — { "as_of", "close_date", "universe", "count",
                            "rows": [...] } for the latest close only.
+    data/industry_weekly.json — { "as_of", "weeks": 12,
+                           "candles": {ticker: [{w, o, h, l, c}]} }
+                           for the latest close only (last 12 weeks,
+                           weeks ending on each week's last trading day).
 """
 from __future__ import annotations
 
@@ -103,6 +114,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DATA_PATH = ROOT / "data" / "history.json"
 RS_PATH = ROOT / "data" / "rs.json"
+WEEKLY_PATH = ROOT / "data" / "industry_weekly.json"
+WEEKS_KEPT = 12  # weekly candles kept per industry ETF
+WEEKLY_MIN_TICKERS = 100  # below this, a run is treated as a failed
+# fetch and the last good industry_weekly.json is left untouched.
 RS_UNIVERSE = "SP500+NDX100"
 # RS Rating needs four 63-session quarters (252 sessions back) plus
 # the 6M window (126 sessions); constituents are fetched with 2y of
@@ -669,8 +684,14 @@ def _atr(frame, idx: int) -> tuple[float | None, float | None]:
 
 def _strength_row(ticker: str, name: str, frame, dates: list[str],
                   idx: int, bench_1m: float | None,
+                  bench_5d: float | None,
                   universe_1m: list[float], universe_5d: list[float]) -> dict | None:
-    """One Market Strength / Industry row for session dates[idx]."""
+    """One Market Strength / Industry row for session dates[idx].
+
+    bench_1m / bench_5d are RSP's 21-session and 5-session returns
+    for the same session; ret_5d is the ticker's own 5-session
+    return, reused as the 1W return (1W = trailing 5 sessions).
+    """
     row = frame.iloc[idx]
     close = _num(row.get("Close"))
     if close is None:
@@ -705,6 +726,8 @@ def _strength_row(ticker: str, name: str, frame, dates: list[str],
         "atr_index": atr_index,
         "atr_pct": atr_pct,
         "rs_vs_rsp": round(ret_1m - bench_1m, 2) if ret_1m is not None and bench_1m is not None else None,
+        "ret_1w_pct": ret_5d,
+        "rs_1w_vs_rsp": round(ret_5d - bench_5d, 2) if ret_5d is not None and bench_5d is not None else None,
         "intraday_pct": intraday,
         "ret_1d_pct": ret_1d,
         "ret_1m_pct": ret_1m,
@@ -1019,6 +1042,80 @@ def write_rs_snapshot(rows: list[dict], close_date: str) -> None:
     print(f"RS screener: wrote {len(rows)} rows to {RS_PATH} (as_of={close_date})")
 
 
+# ---------------------------------------------------------------- weekly candles
+
+def _weekly_bars(frame) -> list[dict]:
+    """Weekly OHLC bars from one daily OHLCV frame, last 12 weeks.
+
+    Weeks are ISO calendar weeks; each bar ends on that week's last
+    trading day, which is the bar's date ("w"). Bars are
+    chronological, most recent last. A bar is skipped when any of
+    its OHLC values is missing. Returns [] when the frame has too
+    little history.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return []
+    if frame is None or len(frame) < 5:
+        return []
+    idx = pd.to_datetime(frame.index)
+    df = frame.copy()
+    df.index = idx
+    iso = idx.isocalendar()
+    bars: list[dict] = []
+    for _, g in df.groupby([iso.year, iso.week]):
+        o = _num(g["Open"].iloc[0])
+        h = _num(g["High"].max())
+        l = _num(g["Low"].min())
+        c = _num(g["Close"].iloc[-1])
+        if None in (o, h, l, c):
+            continue
+        bars.append({
+            "w": g.index[-1].date().isoformat(),
+            "o": round(o, 2),
+            "h": round(h, 2),
+            "l": round(l, 2),
+            "c": round(c, 2),
+        })
+    return bars[-WEEKS_KEPT:]
+
+
+def compute_industry_weekly(etf_ohlcv: dict) -> dict | None:
+    """Weekly OHLC candles for the 173 industry ETFs, latest close
+    only: {"as_of", "weeks": 12, "candles": {ticker: [bars]}}.
+
+    Derived from the daily bars already fetched in this run — no
+    extra downloads. An ETF is included only when it has a full
+    12 weeks of bars. Returns None when too few ETFs qualify
+    (caller keeps the last good file).
+    """
+    candles: dict[str, list[dict]] = {}
+    as_of = None
+    for ticker, _ in IND_LIST:
+        frame = etf_ohlcv.get(ticker)
+        if frame is None or len(frame) == 0:
+            continue
+        bars = _weekly_bars(frame)
+        if len(bars) < WEEKS_KEPT:
+            continue
+        candles[ticker] = bars
+        if as_of is None or bars[-1]["w"] > as_of:
+            as_of = bars[-1]["w"]
+    if len(candles) < WEEKLY_MIN_TICKERS or as_of is None:
+        return None
+    return {"as_of": as_of, "weeks": WEEKS_KEPT, "candles": candles}
+
+
+def write_industry_weekly(payload: dict) -> None:
+    """Write data/industry_weekly.json for one close date (latest
+    close only)."""
+    WEEKLY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    WEEKLY_PATH.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"Industry weekly: wrote {len(payload['candles'])} ETFs to "
+          f"{WEEKLY_PATH} (as_of={payload['as_of']})")
+
+
 # ---------------------------------------------------------------- sessions
 
 def build_sessions(etf_ohlcv: dict, const_ohlcv: dict, constituents: dict,
@@ -1038,10 +1135,12 @@ def build_sessions(etf_ohlcv: dict, const_ohlcv: dict, constituents: dict,
         return []
     bench_frame = etf_ohlcv[BENCHMARK]
     dates = sorted(bench_frame.index.tolist())
-    # Benchmark 1M returns per date.
+    # Benchmark 1M / 1W (5-session) returns per date.
     bench_1m_by_date: dict[str, float | None] = {}
+    bench_5d_by_date: dict[str, float | None] = {}
     for i, d in enumerate(dates):
         bench_1m_by_date[d] = _ret_at(bench_frame, i, SESSIONS_1M)
+        bench_5d_by_date[d] = _ret_at(bench_frame, i, 5)
     # Breadth (needs the constituent close matrix).
     breadth_by_date: dict = {}
     if const_ohlcv:
@@ -1105,7 +1204,7 @@ def build_sessions(etf_ohlcv: dict, const_ohlcv: dict, constituents: dict,
             j = frame.index.tolist().index(d)
             tape.append(_strength_row(
                 ticker, INDEX_NAMES[ticker], frame, dates, j,
-                bench_1m_by_date[d], [], []))
+                bench_1m_by_date[d], bench_5d_by_date[d], [], []))
         if len(tape) != len(TAPE):
             continue
         tape_simple = [{
@@ -1130,7 +1229,8 @@ def build_sessions(etf_ohlcv: dict, const_ohlcv: dict, constituents: dict,
                     continue
                 j = frame.index.tolist().index(d)
                 row = _strength_row(ticker, name, frame, dates, j,
-                                    bench_1m_by_date[d], u1m, u5d)
+                                    bench_1m_by_date[d], bench_5d_by_date[d],
+                                    u1m, u5d)
                 if row:
                     rows.append(row)
             sectors[key] = rows
@@ -1143,7 +1243,8 @@ def build_sessions(etf_ohlcv: dict, const_ohlcv: dict, constituents: dict,
                 continue
             j = frame.index.tolist().index(d)
             row = _strength_row(ticker, name, frame, dates, j,
-                                bench_1m_by_date[d], u1m, u5d)
+                                bench_1m_by_date[d], bench_5d_by_date[d],
+                                u1m, u5d)
             if row:
                 industries.append(row)
         industries.sort(key=lambda r: (r["rs_vs_rsp"] is None, -(r["rs_vs_rsp"] or 0)))
@@ -1237,6 +1338,15 @@ def main() -> int:
         else:
             print(f"RS screener: only {len(rs_rows)} rows for {rs_close}; "
                   "leaving rs.json unchanged.")
+
+    # Industry weekly candles (latest close only). Regenerated on
+    # every run, even when history.json gains no new session.
+    weekly = compute_industry_weekly(etf_ohlcv)
+    if weekly is not None:
+        write_industry_weekly(weekly)
+    else:
+        print("Industry weekly: too few ETFs with 12 weeks of bars; "
+              "leaving industry_weekly.json unchanged.")
 
     new_sessions = [s for s in build_sessions(
         etf_ohlcv, const_ohlcv, constituents, cot, existing_sessions)
