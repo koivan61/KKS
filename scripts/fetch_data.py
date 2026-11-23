@@ -69,6 +69,15 @@ Definitions:
     last 5/10 sessions / sum of daily down counts over the same window.
   - Above 40D % = share of constituents with close above their
     40-session moving average.
+  - Breadth indexes (per session, simple moving averages of closes):
+    MMFI = % of the combined S&P 500 + Nasdaq-100 universe (518 names)
+    above its 50-day SMA; MMTW = same universe above its 20-day SMA;
+    S5TW = % of S&P 500 constituents above their 20-day SMA; NDTW =
+    % of Nasdaq-100 constituents above their 20-day SMA. A ticker
+    counts only with the full N sessions of history. Note the MM
+    ("all-stocks") indexes cover the S&P 500 + Nasdaq-100 combined
+    universe, not the full ~5,000 US-listed universe the standard
+    $MMFI/$MMTW cover.
   - ADR % = mean true-range % over the last 21 sessions.
   - Extension = (close - 50-session SMA) / 50D ATR, in ATR multiples.
 
@@ -552,15 +561,20 @@ def _parse_constituent_table(html: str) -> list[tuple[str, str, str, str]]:
     return []
 
 
-def fetch_constituents() -> dict:
-    """{yahoo ticker: (sector, sub-industry, company name)} for
-    S&P 500 + Nasdaq-100.
+def fetch_constituents() -> tuple[dict, set, set]:
+    """S&P 500 + Nasdaq-100 constituents.
 
-    Returns {} when neither list can be fetched — callers must then
-    leave breadth/liquid null instead of inventing values.
+    Returns ({yahoo ticker: (sector, sub-industry, company name)},
+    spx_tickers, ndx_tickers) — the two sets record which Wikipedia
+    list each ticker came from, so breadth indexes can be computed
+    per universe. Returns ({}, set(), set()) when neither list can be
+    fetched — callers must then leave breadth/liquid null instead of
+    inventing values.
     """
     out: dict[str, tuple[str, str, str]] = {}
-    for url in (SPX_LIST_URL, NDX_LIST_URL):
+    spx: set[str] = set()
+    ndx: set[str] = set()
+    for url, dest in ((SPX_LIST_URL, spx), (NDX_LIST_URL, ndx)):
         try:
             html = _http_get(url, timeout=30).decode("utf-8", "ignore")
         except Exception as exc:  # noqa: BLE001
@@ -568,9 +582,10 @@ def fetch_constituents() -> dict:
             continue
         for sym, sector, sub, name in _parse_constituent_table(html):
             out.setdefault(sym, (sector, sub, name))
+            dest.add(sym)
     if out:
         print(f"Constituents: {len(out)} tickers (S&P 500 + Nasdaq-100)")
-    return out
+    return out, spx, ndx
 
 
 # ---------------------------------------------------------------- COT
@@ -807,6 +822,93 @@ def compute_breadth(const_closes, dates: list[str], spx_frame) -> dict:
             "spx_session_pct": spx_1d,
         }
     return out
+
+
+def compute_breadth_idx(const_closes, spx_cols: list[str], ndx_cols: list[str],
+                        dates: list[str]) -> dict:
+    """Per-session % of constituents above their 20D / 50D SMA, by universe.
+
+    const_closes: DataFrame of constituent closes, columns = tickers,
+    index = date strings. spx_cols / ndx_cols: tickers in each list
+    that are present in the frame. Returns {date: {"mmfi", "mmtw",
+    "s5tw", "ndtw"}} — mmfi/mmtw over the combined universe, s5tw over
+    S&P 500 only, ndtw over Nasdaq-100 only. A ticker counts only when
+    it has the full N sessions of history (rolling mean is NaN
+    otherwise), and is excluded from numerator AND denominator. Values
+    are rounded to 1 decimal; None when no valid names. Returns {}
+    when the frames are missing.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return {}
+    if const_closes is None or const_closes.empty:
+        return {}
+    closes = const_closes.reindex(dates)
+    ma20 = closes.rolling(20, min_periods=20).mean()
+    ma50 = closes.rolling(50, min_periods=50).mean()
+    all_cols = [c for c in closes.columns]
+    spx = [c for c in spx_cols if c in closes.columns]
+    ndx = [c for c in ndx_cols if c in closes.columns]
+
+    def _above_pct(cols, ma, d):
+        if not cols:
+            return None
+        if d not in ma.index:
+            return None
+        m = ma.loc[d, cols]
+        c = closes.loc[d, cols]
+        valid = m.notna() & c.notna()
+        n_valid = int(valid.sum())
+        if not n_valid:
+            return None
+        return round(float(((c > m) & valid).sum()) / n_valid * 100.0, 1)
+
+    out = {}
+    for d in dates:
+        if d not in closes.index:
+            continue
+        out[d] = {
+            "mmfi": _above_pct(all_cols, ma50, d),
+            "mmtw": _above_pct(all_cols, ma20, d),
+            "s5tw": _above_pct(spx, ma20, d),
+            "ndtw": _above_pct(ndx, ma20, d),
+        }
+    return out
+
+
+def compute_breadth_idx_counts(const_closes, spx_cols: list[str],
+                               ndx_cols: list[str], d: str) -> dict:
+    """Valid-name counts (n_valid) behind each breadth index at date d.
+
+    Diagnostic helper for the 2026-11-20 backfill verification; mirrors
+    compute_breadth_idx exactly. Returns {"mmfi": n, "mmtw": n,
+    "s5tw": n, "ndtw": n} with 0 when the frames are missing.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return {"mmfi": 0, "mmtw": 0, "s5tw": 0, "ndtw": 0}
+    if const_closes is None or const_closes.empty:
+        return {"mmfi": 0, "mmtw": 0, "s5tw": 0, "ndtw": 0}
+    closes = const_closes
+    ma20 = closes.rolling(20, min_periods=20).mean()
+    ma50 = closes.rolling(50, min_periods=50).mean()
+    all_cols = [c for c in closes.columns]
+    spx = [c for c in spx_cols if c in closes.columns]
+    ndx = [c for c in ndx_cols if c in closes.columns]
+
+    def _n(cols, ma):
+        if not cols or d not in ma.index:
+            return 0
+        return int((ma.loc[d, cols].notna() & closes.loc[d, cols].notna()).sum())
+
+    return {
+        "mmfi": _n(all_cols, ma50),
+        "mmtw": _n(all_cols, ma20),
+        "s5tw": _n(spx, ma20),
+        "ndtw": _n(ndx, ma20),
+    }
 
 
 # ---------------------------------------------------------------- liquid
@@ -1119,7 +1221,9 @@ def write_industry_weekly(payload: dict) -> None:
 # ---------------------------------------------------------------- sessions
 
 def build_sessions(etf_ohlcv: dict, const_ohlcv: dict, constituents: dict,
-                   cot: dict | None, existing_sessions: list[dict]) -> list[dict]:
+                   cot: dict | None, existing_sessions: list[dict],
+                   spx_tickers: set | None = None,
+                   ndx_tickers: set | None = None) -> list[dict]:
     """Build one session dict per close date from raw OHLCV.
 
     Sections that could not be computed (missing data) are null —
@@ -1143,12 +1247,16 @@ def build_sessions(etf_ohlcv: dict, const_ohlcv: dict, constituents: dict,
         bench_5d_by_date[d] = _ret_at(bench_frame, i, 5)
     # Breadth (needs the constituent close matrix).
     breadth_by_date: dict = {}
+    idx_by_date: dict = {}
     if const_ohlcv:
         tickers = [t for t in constituents if t in const_ohlcv]
         if tickers:
             closes = pd.DataFrame({t: const_ohlcv[t]["Close"] for t in tickers})
             spx_frame = etf_ohlcv.get("^GSPC")
             breadth_by_date = compute_breadth(closes, dates, spx_frame)
+            spx_cols = [t for t in (spx_tickers or ()) if t in closes.columns]
+            ndx_cols = [t for t in (ndx_tickers or ()) if t in closes.columns]
+            idx_by_date = compute_breadth_idx(closes, spx_cols, ndx_cols, dates)
     # Liquid leaders.
     liquid_by_date: dict = {}
     if const_ohlcv and constituents:
@@ -1266,6 +1374,7 @@ def build_sessions(etf_ohlcv: dict, const_ohlcv: dict, constituents: dict,
             "breadth_up": breadth["daily_up"] if breadth else None,
             "breadth_down": breadth["daily_down"] if breadth else None,
             "breadth": breadth,
+            "breadth_idx": idx_by_date.get(d),
             "sectors": sectors if any(sectors.values()) else None,
             "industries": industries if industries else None,
             "positioning": positioning,
@@ -1303,7 +1412,7 @@ def main() -> int:
         return 0
 
     print("Fetching constituent lists ...")
-    constituents = fetch_constituents()
+    constituents, spx_tickers, ndx_tickers = fetch_constituents()
     const_ohlcv: dict = {}
     if constituents:
         # 2y of history: the RS Rating needs 252 sessions back, and
@@ -1349,7 +1458,8 @@ def main() -> int:
               "leaving industry_weekly.json unchanged.")
 
     new_sessions = [s for s in build_sessions(
-        etf_ohlcv, const_ohlcv, constituents, cot, existing_sessions)
+        etf_ohlcv, const_ohlcv, constituents, cot, existing_sessions,
+        spx_tickers, ndx_tickers)
         if s["close_date"] not in have]
     if not new_sessions:
         print("No new sessions to append.")

@@ -58,6 +58,18 @@ sessions; on fetch failure it exits 0 and leaves the last good
   (Wikipedia list, 518 tickers with Nasdaq-100): Daily ±4%
   up/down, 5D/10D ratio, Quarter ±25%, Month ±25% and ±50%,
   34D ±13%, Above 40D %, SPX close and 1D %.
+  Each session also carries `breadth_idx` — four breadth
+  indexes, all simple moving averages of daily closes, a
+  ticker counting only with the full N sessions of history:
+  **MMFI** = % of the combined S&P 500 + Nasdaq-100 universe
+  (518 names) above its 50-day SMA; **MMTW** = same universe
+  above its 20-day SMA; **S5TW** = % of S&P 500 constituents
+  above their 20-day SMA; **NDTW** = % of Nasdaq-100
+  constituents above their 20-day SMA. Note the MM
+  ("all-stocks") indexes cover the 518-name combined universe,
+  not the full ~5,000 US-listed universe the standard $MMFI /
+  $MMTW cover; R2TW (Russell 2000) is not computed — the
+  fetcher holds no Russell 2000 constituents.
 - **Positioning (COT)**: CFTC legacy futures-only file
   (`deafut.txt`) for the 10 markets. Net long/short contracts
   verified exactly against the reference site's 2026-11-17
