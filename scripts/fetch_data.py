@@ -32,7 +32,7 @@ What it covers (6 pages; the Screener page was removed from the site):
     and ADR %; plus a group-leadership summary by GICS sub-industry.
   - RS Screener: one row per stock in the liquid universe (all
     US-listed common stocks with 30-session mean dollar volume
-    > $100M, re-screened weekly) for the latest close — 1D/1M/3M/6M
+    > $50M, re-screened weekly) for the latest close — 1D/1M/3M/6M
     returns, RS 1M % vs RSP, RS
     percentile (0-100), O'Neil RS Rating (1-99), extension vs 50D
     SMA, ADR %, avg dollar volume, above 50D/200D, off 52W high and
@@ -104,6 +104,9 @@ Output:
     data/history.json  — { "as_of": "YYYY-MM-DD", "sessions": [...] }
     data/rs.json       — { "as_of", "close_date", "universe", "count",
                            "rows": [...] } for the latest close only.
+    data/rs/<date>.json — same shape, one file per close date, newest
+                           20 kept; the page lazy-loads the file for
+                           the selected close.
     data/industry_weekly.json — { "as_of", "weeks": 12,
                            "candles": {ticker: [{w, o, h, l, c}]} }
                            for the latest close only (last 12 weeks,
@@ -125,11 +128,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DATA_PATH = ROOT / "data" / "history.json"
 RS_PATH = ROOT / "data" / "rs.json"
+RS_HISTORY_DIR = ROOT / "data" / "rs"
+RS_HISTORY_KEPT = 20  # per-date RS tables kept; older files are pruned
 WEEKLY_PATH = ROOT / "data" / "industry_weekly.json"
 WEEKS_KEPT = 12  # weekly candles kept per industry ETF
 WEEKLY_MIN_TICKERS = 100  # below this, a run is treated as a failed
 # fetch and the last good industry_weekly.json is left untouched.
-RS_UNIVERSE = "LIQUID-ADV100M"
+RS_UNIVERSE = "LIQUID-ADV50M"
 # RS Rating needs four 63-session quarters (252 sessions back) plus
 # the 6M window (126 sessions); constituents are fetched with 2y of
 # history so both are covered.
@@ -138,7 +143,7 @@ SESSIONS_6M = 126
 RS_MIN_ROWS = 100  # below this, a run is treated as a failed fetch
 # and the last good rs.json is left untouched.
 LIQUID_UNIVERSE_PATH = ROOT / "data" / "liquid_universe.json"
-LIQUID_ADV_MIN = 100_000_000  # 30-session mean dollar volume bar
+LIQUID_ADV_MIN = 50_000_000  # 30-session mean dollar volume bar
 LIQUID_RESCREEN_DAYS = 7  # re-screen when the stored list is this old
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt"
 OTHER_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt"
@@ -658,7 +663,7 @@ def fetch_nasdaq_trader_lists() -> dict:
 
 
 def screen_liquid_universe(candidates: dict) -> list[str]:
-    """Tickers whose 30-session mean dollar volume exceeds $100M.
+    """Tickers whose 30-session mean dollar volume exceeds $50M.
 
     Fetches ~3 months of closes for every candidate and keeps the
     ones with mean(close x volume) over the last 30 sessions above
@@ -1326,6 +1331,32 @@ def write_rs_snapshot(rows: list[dict], close_date: str) -> None:
     print(f"RS screener: wrote {len(rows)} rows to {RS_PATH} (as_of={close_date})")
 
 
+def write_rs_history(rows: list[dict], close_date: str) -> None:
+    """Write data/rs/<close_date>.json and prune to the newest 20 dates.
+
+    Same payload shape as data/rs.json. The page lazy-loads the
+    per-date file when the user picks that close, so the screener
+    shows the real table for past dates instead of falling back to
+    the embedded preview sample. Pruning keeps the repo bounded:
+    one file per trading session, newest 20 kept.
+    """
+    RS_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "as_of": close_date,
+        "close_date": close_date,
+        "universe": RS_UNIVERSE,
+        "count": len(rows),
+        "rows": rows,
+    }
+    path = RS_HISTORY_DIR / f"{close_date}.json"
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"RS screener: wrote {len(rows)} rows to {path} (as_of={close_date})")
+    files = sorted(RS_HISTORY_DIR.glob("????-??-??.json"))
+    for old in files[:-RS_HISTORY_KEPT]:
+        old.unlink()
+        print(f"RS screener: pruned old per-date file {old.name}")
+
+
 # ---------------------------------------------------------------- weekly candles
 
 def _weekly_bars(frame) -> list[dict]:
@@ -1651,6 +1682,7 @@ def main() -> int:
                                           etf_ohlcv[BENCHMARK], rs_close)
                 if len(rs_rows) >= RS_MIN_ROWS:
                     write_rs_snapshot(rs_rows, rs_close)
+                    write_rs_history(rs_rows, rs_close)
                 else:
                     print(f"RS screener: only {len(rs_rows)} rows for {rs_close}; "
                           "leaving rs.json unchanged.")
