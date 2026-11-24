@@ -1,9 +1,12 @@
 name: Update market data
 
-# Runs after the US close on weekdays and refreshes data/history.json.
+# Runs after the US close on weekdays and refreshes data/history.json,
+# data/rs.json, data/industry_weekly.json and data/liquid_universe.json.
 # GitHub Pages itself is static: this Action is the only updater.
 # If Yahoo Finance fails on a run, the script exits 0 and leaves the
-# last good history.json in place — the page never goes blank.
+# last good history.json / rs.json / industry_weekly.json /
+# liquid_universe.json in place —
+# the page never goes blank.
 on:
   schedule:
     - cron: "0 22 * * 1-5"  # 22:00 UTC, Mon-Fri (~17:00 ET)
@@ -24,15 +27,14 @@ jobs:
         run: pip install -r scripts/requirements.txt
       - name: Fetch latest closes
         run: python scripts/fetch_data.py
-      - name: Commit updated history
+      - name: Commit updated data
         run: |
-          if git diff --quiet data/history.json; then
+          if git diff --quiet data/history.json data/rs.json data/industry_weekly.json data/liquid_universe.json; then
             echo "No new sessions."
           else
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add data/history.json
+            git add data/history.json data/rs.json data/industry_weekly.json data/liquid_universe.json
             git commit -m "Update market history"
             git push
           fi
-
