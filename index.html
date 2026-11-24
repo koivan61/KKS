@@ -1191,7 +1191,12 @@ function applyToSnap(date, ns){
   if(!base){
     var src=null, i;
     for(i=0;i<DATES.length;i++){ if(SNAP[DATES[i]] && DATES[i]<=date) src=DATES[i]; }
-    if(!src) src=DATES[DATES.length-1];
+    // No earlier snapshot exists (e.g. history.json starts 2026-05-26 while the
+    // embedded snapshot only covers 2026-11-13..20): clone the earliest available
+    // snapshot instead of the newest date, which may not have one yet. Never throw
+    // here — a throw aborts applyHistory before the date picker is updated.
+    if(!src){ for(i=0;i<DATES.length;i++){ if(SNAP[DATES[i]]){ src=DATES[i]; break; } } }
+    if(!src || !SNAP[src]) return;
     base=JSON.parse(JSON.stringify(SNAP[src]));
     SNAP[date]=base;
   }
