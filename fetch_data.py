@@ -1281,6 +1281,8 @@ def compute_rs_rows(const_ohlcv: dict, constituents: dict,
     ema_9m = closes.ewm(span=189, adjust=False).mean().iloc[pos]
 
     universe_1m = [float(v) for v in ret_1m.dropna()]
+    universe_3m = [float(v) for v in ret_3m.dropna()]
+    universe_6m = [float(v) for v in ret_6m.dropna()]
     weighted_pop = [float(v) for v in weighted.dropna()]
     rows: list[dict] = []
     for t in tickers:
@@ -1302,6 +1304,14 @@ def compute_rs_rows(const_ohlcv: dict, constituents: dict,
             # _pct_rank can overshoot 100 for the top-ranked value
             # (mid-rank tie handling); clamp to the 0-100 range.
             "rs_pct": min(100.0, _pct_rank(r1m, universe_1m)) if r1m is not None else None,
+            # 1-99 percentile ranks of the 1M / 3M / 6M return inside this
+            # same-day universe (same _rank_1_99 as the O'Neil RS Rating).
+            # Ranking raw returns equals ranking excess vs RSP: the
+            # benchmark is common to every name. Null when the window
+            # return is missing (e.g. <126 sessions for 6M), never invented.
+            "rs_1m": _rank_1_99(r1m, universe_1m),
+            "rs_3m": _rank_1_99(_num(ret_3m.get(t)), universe_3m),
+            "rs_6m": _rank_1_99(_num(ret_6m.get(t)), universe_6m),
             "rs_rating": _rank_1_99(_num(weighted.get(t)), weighted_pop),
             "ext_50d_pct": _r1((px / _num(sma50.get(t)) - 1.0) * 100.0) if _num(sma50.get(t)) else None,
             "adr_pct": _r1(adr.get(t)),

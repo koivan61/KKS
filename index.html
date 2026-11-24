@@ -426,6 +426,7 @@ SNAP["2026-11-16"] = cloneWith("2026-11-16","2026-11-18",-0.4);
 SNAP["2026-11-13"] = cloneWith("2026-11-13","2026-11-19",0.7);
 
 var current = "2026-11-20";
+var userPickedDate = false;
 function fmt(v){ return (v>0?"+":"")+ (Math.round(v*10)/10) + "%"; }
 function fmt2(v){ return (v>0?"+":"")+ v + "%"; }
 function cls(v){ return v>0?"pos":(v<0?"neg":""); }
@@ -507,10 +508,11 @@ function render(dateKey){
     return '<article class="pos-card"><div class="pos-card-head"><h4'+titleCls+'>'+p.name+'</h4><span class="etf">'+p.etf+'</span></div>'+head+rows+'</article>';
   }).join('');
 }
-document.getElementById('prevBtn').addEventListener('click', function(){ var i=DATES.indexOf(current); if(i>0) render(DATES[i-1]); });
-document.getElementById('nextBtn').addEventListener('click', function(){ var i=DATES.indexOf(current); if(i<DATES.length-1) render(DATES[i+1]); });
+document.getElementById('prevBtn').addEventListener('click', function(){ userPickedDate=true; var i=DATES.indexOf(current); if(i>0) render(DATES[i-1]); });
+document.getElementById('nextBtn').addEventListener('click', function(){ userPickedDate=true; var i=DATES.indexOf(current); if(i<DATES.length-1) render(DATES[i+1]); });
 document.getElementById('latestBtn').addEventListener('click', function(){ render(DATES[DATES.length-1]); });
 document.getElementById('dateInput').addEventListener('change', function(e){
+  userPickedDate=true;
   var v=e.target.value;
   if(SNAP[v]){ render(v); return; }
   // snap to nearest prior trading day
@@ -1309,6 +1311,7 @@ function applyHistory(json){
   if(!Object.keys(HIST).length) return;
   var di=document.getElementById('dateInput');
   if(di){ di.min=DATES[0]; di.max=DATES[DATES.length-1]; }
+  if(!userPickedDate && DATES.length) current=DATES[DATES.length-1];
   render(curDate());
   renderPage();
 }
@@ -1350,32 +1353,35 @@ function loadIndWeekly(){
 // (universe id "LIQUID-ADV50M"; 1,470 stocks at the 2026-11-20 screen, 1,469 rows at the 2026-11-23 close). When
 // data/rs.json is present it replaces the embedded fallback below (see loadRS at
 // the end of this section). The embedded fallback is ONLY a preview sample: the
-// top 20 of the 997 by 1M return at the 2026-11-20 close, with real values.
+// top 20 of 1,470 by 1M return at the 2026-11-23 close, with real values.
 // RS 1M is measured vs RSP. RS percentile ranks RS 1M vs RSP inside the universe
 // (0-100). O'Neil RS Rating ranks the weighted quarterly score (0.4 x most recent
 // quarter + 0.2 x each of the prior three quarters) inside the universe, 1-99.
-var RS_KEYS=["ticker","name","industry","price","ret_1d_pct","ret_1m_pct","ret_3m_pct","ret_6m_pct","rs_1m_vs_rsp_pct","rs_pct","rs_rating","ext_50d_pct","adr_pct","avg_dollar_vol_m","above_50d","above_200d","off_52w_high_pct","ema_9d","ema_9w","ema_9m"];
+// RS 1M / RS 3M / RS 6M (rs_1m / rs_3m / rs_6m) are 1-99 percentiles of the
+// 1M / 3M / 6M return inside the same-day LIQUID-ADV50M universe, computed
+// from completed closes; null when a stock lacks enough history (shown as —).
+var RS_KEYS=["ticker","name","industry","price","ret_1d_pct","ret_1m_pct","ret_3m_pct","ret_6m_pct","rs_1m_vs_rsp_pct","rs_pct","rs_1m","rs_3m","rs_6m","rs_rating","ext_50d_pct","adr_pct","avg_dollar_vol_m","above_50d","above_200d","off_52w_high_pct","ema_9d","ema_9w","ema_9m"];
 var RS_PREVIEW_ROWS=[
-["REPL","Replimune Group, Inc. - Common Stock","Other",20.96,9.9,82.9,32.7,355.7,84.6,100.0,98,35.3,5.4,65.3,true,true,-11.0,true,true,true],
-["SGRY","Surgery Partners, Inc. - Common Stock","Other",26.56,-0.8,68.6,89.0,97.5,70.4,100.0,98,41.2,3.3,175.2,true,true,-2.4,true,true,true],
-["FUN","Six Flags Entertainment Corporation Common Stock New","Leisure Facilities",11.2,1.3,65.4,-32.5,-44.3,67.2,99.9,15,9.0,5.1,54.2,true,false,-57.4,true,true,false],
-["INSM","Insmed Incorporated - Common Stock","Other",149.09,5.5,59.6,20.3,36.9,61.4,99.8,38,33.6,3.9,526.5,true,true,-29.9,true,true,true],
-["AXGN","Axogen, Inc. - Common Stock","Other",58.66,5.2,54.1,17.5,41.5,55.8,99.8,95,31.4,3.9,107.1,true,true,-1.8,true,true,true],
-["APP","Applovin Corporation - Class A Common Stock","Advertising",373.92,7.4,43.7,20.4,-27.3,45.4,99.7,44,20.6,5.6,2037.2,true,false,-49.3,false,true,false],
-["ADT","ADT Inc. Common Stock","Specialized Consumer Services",9.9,0.3,43.5,33.2,42.9,45.2,99.6,86,27.0,2.2,274.2,true,true,-1.0,true,true,true],
-["VRDN","Viridian Therapeutics, Inc.  - Common Stock","Other",31.89,6.4,42.6,31.9,87.6,44.3,99.6,86,34.4,3.1,84.0,true,true,-7.0,true,true,true],
-["GKOS","Glaukos Corporation Common Stock","Health Care Equipment",249.59,5.2,39.5,37.6,117.1,41.2,99.5,97,29.6,4.0,430.9,true,true,-2.2,true,true,true],
-["JBLU","JetBlue Airways Corporation - Common Stock","Passenger Airlines",3.63,9.3,38.0,-28.5,-31.3,39.7,99.4,16,-0.5,5.4,100.3,false,false,-45.2,true,false,false],
-["WEN","Wendy's Company (The) - Common Stock","Restaurants",8.54,-0.7,37.3,-6.4,16.0,39.0,99.4,41,20.6,2.3,64.7,true,true,-9.6,true,true,true],
-["RIOT","Riot Platforms, Inc. - Common Stock","Other",17.15,5.7,36.9,-19.5,-34.2,38.6,99.3,68,-2.1,5.7,476.1,false,false,-43.4,true,true,false],
-["KYMR","Kymera Therapeutics, Inc. - Common Stock","Other",150.37,30.4,35.8,18.7,86.2,37.5,99.2,96,27.1,4.1,180.1,true,true,-6.9,true,true,true],
-["CGON","CG Oncology, Inc. - Common stock","Other",83.51,5.1,35.3,5.8,34.9,37.0,99.1,93,20.9,4.2,150.2,true,true,-11.1,true,true,true],
-["FRVO","Fervo Energy Company - Class A common stock","Other",10.78,7.9,34.1,-34.5,-72.7,35.8,99.1,null,-9.4,7.4,92.4,false,null,-74.7,false,false,false],
-["OMH","Ohmyhome Limited - Class A Ordinary Shares","Other",4.36,21.1,33.7,-11.9,-89.5,35.5,99.0,5,-0.2,46.3,168.8,false,false,-96.0,false,false,false],
-["ACM","AECOM Common Stock","Construction & Engineering",80.75,2.7,33.5,28.6,11.4,35.2,98.9,46,25.5,2.2,118.5,true,true,-25.9,true,true,true],
-["CROX","Crocs, Inc. - Common Stock","Footwear",157.78,2.0,32.3,28.4,36.0,34.1,98.9,94,18.4,3.0,218.4,true,true,-3.9,true,true,true],
-["CMG","Chipotle Mexican Grill, Inc. Common Stock","Restaurants",36.25,2.0,31.7,-3.2,12.2,33.4,98.8,55,11.6,2.5,621.5,true,true,-12.5,true,true,true],
-["FCN","FTI Consulting, Inc. Common Stock","Research & Consulting Services",206.17,0.3,31.1,35.9,35.0,32.8,98.7,87,26.8,1.9,102.2,true,true,-2.0,true,true,true],
+["REPL","Replimune Group, Inc. - Common Stock","Other",20.96,9.9,82.9,32.7,355.7,84.6,100.0,99,97,99,98,35.3,5.4,65.3,true,true,-11.0,true,true,true],
+["SGRY","Surgery Partners, Inc. - Common Stock","Other",26.56,-0.8,68.6,89.0,97.5,70.4,100.0,99,99,98,98,41.2,3.3,175.2,true,true,-2.4,true,true,true],
+["FUN","Six Flags Entertainment Corporation Common Stock New","Leisure Facilities",11.2,1.3,65.4,-32.5,-44.3,67.2,99.9,99,11,9,15,9.0,5.1,54.2,true,false,-57.4,true,true,false],
+["INSM","Insmed Incorporated - Common Stock","Other",149.09,5.5,59.6,20.3,36.9,61.4,99.8,99,94,90,38,33.6,3.9,526.5,true,true,-29.9,true,true,true],
+["AXGN","Axogen, Inc. - Common Stock","Other",58.66,5.2,54.1,17.5,41.5,55.8,99.8,99,93,92,95,31.4,3.9,107.1,true,true,-1.8,true,true,true],
+["APP","Applovin Corporation - Class A Common Stock","Advertising",373.92,7.4,43.7,20.4,-27.3,45.4,99.7,99,94,18,44,20.6,5.6,2037.2,true,false,-49.3,false,true,false],
+["ADT","ADT Inc. Common Stock","Specialized Consumer Services",9.9,0.3,43.5,33.2,42.9,45.2,99.6,99,97,92,86,27.0,2.2,274.2,true,true,-1.0,true,true,true],
+["VRDN","Viridian Therapeutics, Inc.  - Common Stock","Other",31.89,6.4,42.6,31.9,87.6,44.3,99.6,99,97,97,86,34.4,3.1,84.0,true,true,-7.0,true,true,true],
+["GKOS","Glaukos Corporation Common Stock","Health Care Equipment",249.59,5.2,39.5,37.6,117.1,41.2,99.5,98,98,98,97,29.6,4.0,430.9,true,true,-2.2,true,true,true],
+["JBLU","JetBlue Airways Corporation - Common Stock","Passenger Airlines",3.63,9.3,38.0,-28.5,-31.3,39.7,99.4,98,14,16,16,-0.5,5.4,100.3,false,false,-45.2,true,false,false],
+["WEN","Wendy's Company (The) - Common Stock","Restaurants",8.54,-0.7,37.3,-6.4,16.0,39.0,99.4,98,52,75,41,20.6,2.3,64.7,true,true,-9.6,true,true,true],
+["RIOT","Riot Platforms, Inc. - Common Stock","Other",17.15,5.7,36.9,-19.5,-34.2,38.6,99.3,98,24,14,68,-2.1,5.7,476.1,false,false,-43.4,true,true,false],
+["KYMR","Kymera Therapeutics, Inc. - Common Stock","Other",150.37,30.4,35.8,18.7,86.2,37.5,99.2,98,94,97,96,27.1,4.1,180.1,true,true,-6.9,true,true,true],
+["CGON","CG Oncology, Inc. - Common stock","Other",83.51,5.1,35.3,5.8,34.9,37.0,99.1,98,79,89,93,20.9,4.2,150.2,true,true,-11.1,true,true,true],
+["FRVO","Fervo Energy Company - Class A common stock","Other",10.78,7.9,34.1,-34.5,-72.7,35.8,99.1,98,10,2,null,-9.4,7.4,92.4,false,null,-74.7,false,false,false],
+["OMH","Ohmyhome Limited - Class A Ordinary Shares","Other",4.36,21.1,33.7,-11.9,-89.5,35.5,99.0,98,37,1,5,-0.2,46.3,168.8,false,false,-96.0,false,false,false],
+["ACM","AECOM Common Stock","Construction & Engineering",80.75,2.7,33.5,28.6,11.4,35.2,98.9,98,96,70,46,25.5,2.2,118.5,true,true,-25.9,true,true,true],
+["CROX","Crocs, Inc. - Common Stock","Footwear",157.78,2.0,32.3,28.4,36.0,34.1,98.9,98,96,90,94,18.4,3.0,218.4,true,true,-3.9,true,true,true],
+["CMG","Chipotle Mexican Grill, Inc. Common Stock","Restaurants",36.25,2.0,31.7,-3.2,12.2,33.4,98.8,98,58,71,55,11.6,2.5,621.5,true,true,-12.5,true,true,true],
+["FCN","FTI Consulting, Inc. Common Stock","Research & Consulting Services",206.17,0.3,31.1,35.9,35.0,32.8,98.7,98,98,89,87,26.8,1.9,102.2,true,true,-2.0,true,true,true],
 ]
 var RS_SNAPSHOT=(function(){
   var rows=RS_PREVIEW_ROWS.map(function(a){ var o={}; RS_KEYS.forEach(function(k,i){ o[k]=a[i]; }); return o; });
@@ -1383,7 +1389,7 @@ var RS_SNAPSHOT=(function(){
 })();
 var RS_BY_DATE={}; // date -> {rows, source}
 var RS_META={date:'2026-11-23', source:'preview sample', preview:true};
-var RS_STATE={q:'', industry:'all', minPct:0, minRating:0, minAdr:0, maxExt:'', minVol:0, above50:false, above200:false, sortK:'rs_pct', sortDir:-1, page:1};
+var RS_STATE={q:'', industry:'all', minPct:0, minRating:0, minRS1M:0, minRS3M:0, minRS6M:0, minAdr:0, maxExt:'', minVol:0, above50:false, above200:false, sortK:'rs_pct', sortDir:-1, page:1};
 var RS_PAGE_SIZE=100;
 var RS_COLS=[
   {k:'ticker', label:'Ticker', left:1},
@@ -1396,6 +1402,9 @@ var RS_COLS=[
   {k:'ret_6m_pct', label:'6M %'},
   {k:'rs_1m_vs_rsp_pct', label:'RS 1M % vs RSP'},
   {k:'rs_pct', label:'RS %ile'},
+  {k:'rs_1m', label:'RS 1M'},
+  {k:'rs_3m', label:'RS 3M'},
+  {k:'rs_6m', label:'RS 6M'},
   {k:'rs_rating', label:"O'Neil RS"},
   {k:'ext_50d_pct', label:'Ext % vs 50D'},
   {k:'adr_pct', label:'ADR %'},
@@ -1407,10 +1416,11 @@ function rsNormRow(r){
   if(!r || typeof r!=='object') return null;
   var t=r.ticker||r.t||r.symbol||''; if(!t) return null;
   function n(v,d){ var x=(typeof v==='string')?parseFloat(v.replace(/,/g,'')):v; return (typeof x==='number'&&isFinite(x))?x:(d||0); }
+  function nn(v){ if(v==null) return null; var x=(typeof v==='string')?parseFloat(v.replace(/,/g,'')):v; return (typeof x==='number'&&isFinite(x))?Math.round(x):null; }
   return {ticker:String(t), name:r.name||'', industry:r.industry||r.theme||r.sector||'',
     price:n(r.price!=null?r.price:r.close), ret_1d_pct:n(r.ret_1d_pct!=null?r.ret_1d_pct:r.d1), ret_1m_pct:n(r.ret_1m_pct!=null?r.ret_1m_pct:r.m1),
     ret_3m_pct:n(r.ret_3m_pct!=null?r.ret_3m_pct:r.m3), ret_6m_pct:n(r.ret_6m_pct!=null?r.ret_6m_pct:r.m6),
-    rs_1m_vs_rsp_pct:n(r.rs_1m_vs_rsp_pct!=null?r.rs_1m_vs_rsp_pct:r.rs), rs_pct:n(r.rs_pct!=null?r.rs_pct:r.rsPct), rs_rating:Math.round(n(r.rs_rating!=null?r.rs_rating:r.rating)),
+    rs_1m_vs_rsp_pct:n(r.rs_1m_vs_rsp_pct!=null?r.rs_1m_vs_rsp_pct:r.rs), rs_pct:n(r.rs_pct!=null?r.rs_pct:r.rsPct), rs_1m:nn(r.rs_1m), rs_3m:nn(r.rs_3m), rs_6m:nn(r.rs_6m), rs_rating:Math.round(n(r.rs_rating!=null?r.rs_rating:r.rating)),
     ext_50d_pct:n(r.ext_50d_pct!=null?r.ext_50d_pct:r.ext), adr_pct:n(r.adr_pct!=null?r.adr_pct:r.adr), avg_dollar_vol_m:n(r.avg_dollar_vol_m!=null?r.avg_dollar_vol_m:r.vol),
     above_50d:!!r.above_50d, above_200d:!!r.above_200d, off_52w_high_pct:n(r.off_52w_high_pct!=null?r.off_52w_high_pct:r.off),
     ema_9d:!!r.ema_9d, ema_9w:!!r.ema_9w, ema_9m:!!r.ema_9m};
@@ -1432,6 +1442,9 @@ function rsFiltered(){
     if(st.industry!=='all' && r.industry!==st.industry) return false;
     if(r.rs_pct < st.minPct) return false;
     if(st.minRating && r.rs_rating < st.minRating) return false;
+    if(st.minRS1M && (r.rs_1m==null || r.rs_1m < st.minRS1M)) return false;
+    if(st.minRS3M && (r.rs_3m==null || r.rs_3m < st.minRS3M)) return false;
+    if(st.minRS6M && (r.rs_6m==null || r.rs_6m < st.minRS6M)) return false;
     if(st.minAdr && r.adr_pct < st.minAdr) return false;
     if(st.maxExt!=='' && st.maxExt!=null && r.ext_50d_pct > parseFloat(st.maxExt)) return false;
     if(st.minVol && r.avg_dollar_vol_m < st.minVol) return false;
@@ -1469,6 +1482,9 @@ function rsTableHTML(shown){
       +'<td class="'+cls(r.ret_6m_pct)+'">'+fmt(r.ret_6m_pct)+'</td>'
       +'<td><span class="pill '+(r.rs_1m_vs_rsp_pct>=0?'g':'r')+'">'+fmt(r.rs_1m_vs_rsp_pct)+'</span></td>'
       +'<td style="font-weight:800">'+r.rs_pct+'</td>'
+      +'<td style="font-weight:800">'+(r.rs_1m==null?'—':r.rs_1m)+'</td>'
+      +'<td style="font-weight:800">'+(r.rs_3m==null?'—':r.rs_3m)+'</td>'
+      +'<td style="font-weight:800">'+(r.rs_6m==null?'—':r.rs_6m)+'</td>'
       +'<td><span class="rs-rating '+(r.rs_rating>=80?'hi':(r.rs_rating<30?'lo':''))+'">'+r.rs_rating+'</span></td>'
       +'<td class="'+cls(r.ext_50d_pct)+'">'+fmt(r.ext_50d_pct)+'</td>'
       +'<td>'+(Math.round(r.adr_pct*10)/10)+'%</td>'
@@ -1530,13 +1546,16 @@ function renderRSScreener(){
   el.innerHTML=
     '<h2 class="page-title">RS Screener</h2><p class="page-sub">Relative strength screener · Liquid US stocks · 30D avg $ volume &gt; $50M · '+(RS_META.preview?'1470':rows.length)+' stocks · close '+RS_META.date+' · benchmark RSP</p>'
     +(RS_META.preview?'<p class="count-note" style="margin-top:2px"><b>Preview sample: top 20 of 1,470 by 1M return — live site loads the full rs.json</b></p>':'')
-    +'<p class="count-note" style="margin-top:2px">Data date <b>'+RS_META.date+'</b> · source: '+RS_META.source+'. RS %ile = percentile of 1M return vs RSP within this universe (0–100). O\'Neil RS Rating = percentile rank (1–99) of weighted quarterly returns: 0.4 × most recent quarter + 0.2 × each of the prior three quarters.</p>'
+    +'<p class="count-note" style="margin-top:2px">Data date <b>'+RS_META.date+'</b> · source: '+RS_META.source+'. RS %ile = percentile of 1M return vs RSP within this universe (0–100). O\'Neil RS Rating = percentile rank (1–99) of weighted quarterly returns: 0.4 × most recent quarter + 0.2 × each of the prior three quarters. RS 1M / RS 3M / RS 6M = 1–99 percentiles of the 1M / 3M / 6M return within the same-day LIQUID-ADV50M universe, computed from completed closes; they are not official Deepvue/IBD ratings, and are distinct from RS 1M % vs RSP (a return %) and from RS %ile (0–100, the same 1M ranking on a different scale) and from O\'Neil RS Rating.</p>'
     +'<div class="band-row" aria-label="Top RS percentile stocks">'+topHtml+'</div>'
     +'<div class="filters" role="group" aria-label="Screener filters">'
     +'<div class="fld"><label for="rsSearch">Search ticker or name</label><input type="search" id="rsSearch" placeholder="e.g. NVDA or NVIDIA" value="'+esc(RS_STATE.q)+'"></div>'
     +'<div class="fld"><label for="rsIndustry">Industry / Theme</label><select id="rsIndustry">'+indOpts+'</select></div>'
     +'<div class="fld"><label for="rsMinPct">Min RS percentile: <span id="rsMinPctVal">'+RS_STATE.minPct+'</span></label><span style="display:flex;gap:6px;align-items:center"><input type="range" class="rs-range" id="rsMinPctRange" min="0" max="100" step="1" value="'+RS_STATE.minPct+'"><input type="number" id="rsMinPct" min="0" max="100" step="1" value="'+RS_STATE.minPct+'" style="width:72px"></span></div>'
     +'<div class="fld"><label for="rsMinRating">Min RS Rating (1–99)</label><input type="number" id="rsMinRating" min="0" max="99" step="1" placeholder="0" value="'+(RS_STATE.minRating||'')+'"></div>'
+    +'<div class="fld"><label for="rsMinRS1M">Min RS 1M (1–99)</label><input type="number" id="rsMinRS1M" min="0" max="99" step="1" placeholder="80" value="'+(RS_STATE.minRS1M||'')+'"></div>'
+    +'<div class="fld"><label for="rsMinRS3M">Min RS 3M (1–99)</label><input type="number" id="rsMinRS3M" min="0" max="99" step="1" placeholder="80" value="'+(RS_STATE.minRS3M||'')+'"></div>'
+    +'<div class="fld"><label for="rsMinRS6M">Min RS 6M (1–99)</label><input type="number" id="rsMinRS6M" min="0" max="99" step="1" placeholder="80" value="'+(RS_STATE.minRS6M||'')+'"></div>'
     +'<div class="fld"><label for="rsMinAdr">Min ADR %</label><input type="number" id="rsMinAdr" min="0" step="0.1" placeholder="0" value="'+(RS_STATE.minAdr||'')+'"></div>'
     +'<div class="fld"><label for="rsMaxExt">Max extension % vs 50D</label><input type="number" id="rsMaxExt" step="0.5" placeholder="Any" value="'+RS_STATE.maxExt+'"></div>'
     +'<div class="fld"><label for="rsMinVol">Min avg $ vol ($M)</label><input type="number" id="rsMinVol" min="0" step="10" placeholder="0" value="'+(RS_STATE.minVol||'')+'"></div>'
@@ -1545,7 +1564,7 @@ function renderRSScreener(){
     +'</div>'
     +'<p class="count-note" id="rsCount"></p><p class="count-note" id="rsCopyNote" style="margin-top:2px"></p>'
     +'<section class="panel" style="margin-top:8px;padding:10px 12px"><div id="rsTableWrap"></div><div class="rs-pager" id="rsPager" aria-label="Screener pages"></div></section>'
-    +'<p class="foot-note">Click any column header to sort. 9 EMA D/W/M: filled = price above the 9-period EMA on that timeframe, hollow = below. Extension = distance from the 50D SMA. ADR = average daily range. Export symbols copies all currently filtered tickers as a comma-separated list. Data loads from data/rs.json for the latest close and from data/rs/<date>.json for older closes when available; otherwise the embedded preview sample is shown (top 20 of 1,470 by 1M return, close 2026-11-23).</p>';
+    +'<p class="foot-note">Click any column header to sort. RS 1M / RS 3M / RS 6M are 1–99 percentiles of the 1M / 3M / 6M return in the same-day LIQUID-ADV50M universe (completed closes, not official Deepvue/IBD ratings); the three Min RS filters combine with AND, and a row with no value for a window is excluded while that window\'s minimum is set. 9 EMA D/W/M: filled = price above the 9-period EMA on that timeframe, hollow = below. Extension = distance from the 50D SMA. ADR = average daily range. Export symbols copies all currently filtered tickers as a comma-separated list. Data loads from data/rs.json for the latest close and from data/rs/<date>.json for older closes when available; otherwise the embedded preview sample is shown (top 20 of 1,470 by 1M return, close 2026-11-23).</p>';
   updateRSTable();
   function bind(id, ev, fn){ var n=document.getElementById(id); if(n) n.addEventListener(ev, fn); }
   bind('rsSearch','input', function(){ RS_STATE.q=this.value; RS_STATE.page=1; updateRSTable(); });
@@ -1553,12 +1572,15 @@ function renderRSScreener(){
   bind('rsMinPctRange','input', function(){ RS_STATE.minPct=parseInt(this.value,10)||0; var n=document.getElementById('rsMinPct'); if(n) n.value=RS_STATE.minPct; var v=document.getElementById('rsMinPctVal'); if(v) v.textContent=RS_STATE.minPct; RS_STATE.page=1; updateRSTable(); });
   bind('rsMinPct','input', function(){ RS_STATE.minPct=Math.max(0,Math.min(100,parseInt(this.value,10)||0)); var rg=document.getElementById('rsMinPctRange'); if(rg) rg.value=RS_STATE.minPct; var v=document.getElementById('rsMinPctVal'); if(v) v.textContent=RS_STATE.minPct; RS_STATE.page=1; updateRSTable(); });
   bind('rsMinRating','input', function(){ RS_STATE.minRating=parseInt(this.value,10)||0; RS_STATE.page=1; updateRSTable(); });
+  bind('rsMinRS1M','input', function(){ RS_STATE.minRS1M=parseInt(this.value,10)||0; RS_STATE.page=1; updateRSTable(); });
+  bind('rsMinRS3M','input', function(){ RS_STATE.minRS3M=parseInt(this.value,10)||0; RS_STATE.page=1; updateRSTable(); });
+  bind('rsMinRS6M','input', function(){ RS_STATE.minRS6M=parseInt(this.value,10)||0; RS_STATE.page=1; updateRSTable(); });
   bind('rsMinAdr','input', function(){ RS_STATE.minAdr=parseFloat(this.value)||0; RS_STATE.page=1; updateRSTable(); });
   bind('rsMaxExt','input', function(){ RS_STATE.maxExt=this.value; RS_STATE.page=1; updateRSTable(); });
   bind('rsMinVol','input', function(){ RS_STATE.minVol=parseFloat(this.value)||0; RS_STATE.page=1; updateRSTable(); });
   bind('rsAbove50','click', function(){ RS_STATE.above50=!RS_STATE.above50; this.classList.toggle('on', RS_STATE.above50); this.setAttribute('aria-pressed', RS_STATE.above50); RS_STATE.page=1; updateRSTable(); });
   bind('rsAbove200','click', function(){ RS_STATE.above200=!RS_STATE.above200; this.classList.toggle('on', RS_STATE.above200); this.setAttribute('aria-pressed', RS_STATE.above200); RS_STATE.page=1; updateRSTable(); });
-  bind('rsReset','click', function(){ RS_STATE={q:'', industry:'all', minPct:0, minRating:0, minAdr:0, maxExt:'', minVol:0, above50:false, above200:false, sortK:'rs_pct', sortDir:-1, page:1}; renderRSScreener(); });
+  bind('rsReset','click', function(){ RS_STATE={q:'', industry:'all', minPct:0, minRating:0, minRS1M:0, minRS3M:0, minRS6M:0, minAdr:0, maxExt:'', minVol:0, above50:false, above200:false, sortK:'rs_pct', sortDir:-1, page:1}; renderRSScreener(); });
   bind('rsExport','click', function(){
     var list=this.getAttribute('data-tickers')||'';
     var note=document.getElementById('rsCopyNote');
